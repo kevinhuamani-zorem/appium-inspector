@@ -7,6 +7,11 @@ import {
   selectionForStrategy,
 } from '../../app/common/renderer/components/SessionInspector/SourceTab/SelectedElement/EmbeddedRecorderSelection.jsx';
 import {getLocatorCandidateRowProps} from '../../app/common/renderer/components/SessionInspector/SourceTab/SelectedElement/SelectedElementLocatorsTable.jsx';
+import {
+  getClipboardFeedback,
+  handleCopyCellClick,
+} from '../../app/common/renderer/components/SessionInspector/SourceTab/SelectedElement/SelectedElementTableCell.jsx';
+import {CLIPBOARD_COPY_STATUS} from '../../app/common/renderer/utils/other.js';
 
 const candidates = [
   {id: 'id-primary', strategy: 'id', selector: 'login', priority: 10},
@@ -75,7 +80,34 @@ describe('embedded locator selection synchronization', function () {
     });
 
     rowProps.onClick();
+    expect(selectCandidate).toHaveBeenCalledOnce();
     expect(selectCandidate).toHaveBeenCalledWith(candidates[2]);
     expect(transfer).not.toHaveBeenCalled();
+  });
+
+  it('shows success feedback only for a successful clipboard result', function () {
+    const t = (text) => text;
+
+    expect(getClipboardFeedback({status: CLIPBOARD_COPY_STATUS.SUCCESS}, t)).toEqual({
+      title: 'Copied!',
+      color: 'green',
+    });
+    expect(getClipboardFeedback({status: CLIPBOARD_COPY_STATUS.FAILURE, error: new Error('denied')}, t)).toEqual({
+      title: 'Copy failed',
+      color: 'red',
+    });
+    expect(
+      getClipboardFeedback({status: CLIPBOARD_COPY_STATUS.UNAVAILABLE, error: new Error('unavailable')}, t),
+    ).toEqual({title: 'Copy failed', color: 'red'});
+  });
+
+  it('keeps the copy control action separate from row selection', function () {
+    const stopPropagation = vi.fn();
+    const copyText = vi.fn();
+
+    handleCopyCellClick({stopPropagation}, copyText);
+
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    expect(copyText).toHaveBeenCalledOnce();
   });
 });
