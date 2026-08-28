@@ -2,6 +2,7 @@ import sanitize from 'sanitize-filename';
 
 import {SAVED_CLIENT_FRAMEWORK, SET_SAVED_GESTURES} from '../../shared/setting-defs.js';
 import {APP_MODE, NATIVE_APP, UNKNOWN_ERROR} from '../constants/session-inspector.js';
+import {verifyLocatorCandidates} from '../embedded/candidate-verification.js';
 import {EmbeddedProtocolError, emitElementUsed} from '../embedded/protocol.js';
 import {shouldTerminateSession} from '../embedded/session-ownership.js';
 import i18n from '../i18next.js';
@@ -196,9 +197,9 @@ export function unselectElement() {
   };
 }
 
-export function useElementInRecorder(strategy, selector) {
-  return (_dispatch, getState) => {
-    const {isEmbeddedMode, screenshot, sourceXML, selectedElement, selectedElementId} = getState().inspector;
+export function useElementInRecorder(strategy, selector, visibleCandidates) {
+  return async (_dispatch, getState) => {
+    const {driver, isEmbeddedMode, screenshot, sourceXML, selectedElement, selectedElementId} = getState().inspector;
     if (!isEmbeddedMode) {
       throw new EmbeddedProtocolError('NOT_EMBEDDED_MODE', 'Recorder transfer is only available in embedded mode');
     }
@@ -209,21 +210,61 @@ export function useElementInRecorder(strategy, selector) {
       );
     }
 
-    const payload = {
+    const primary = {
       strategy: strategy.trim(),
       selector: selector.trim(),
-      ...(selectedElementId ? {elementId: selectedElementId} : {}),
-      ...(selectedElement.tagName ? {tag: selectedElement.tagName} : {}),
-      attributes: selectedElement.attributes || {},
-      ...(screenshot ? {screenshot} : {}),
-      ...(sourceXML ? {source: sourceXML} : {}),
     };
-    if (!payload.strategy || !payload.selector) {
+    if (!primary.strategy || !primary.selector) {
       throw new EmbeddedProtocolError(
         'INVALID_SELECTION',
         'Select an element and provide a locator strategy and value',
       );
     }
+
+    const selectedElementPath = selectedElement.path;
+    const inspectorDriver = InspectorDriver.instance(driver);
+    const candidates = await verifyLocatorCandidates({
+      primary,
+      proposedCandidates: Array.isArray(visibleCandidates)
+        ? visibleCandidates
+        : selectedElement.locatorCandidates || [],
+      selectedElementId,
+      findElements: async (candidate) => {
+        const result = await inspectorDriver.run({
+          strategy: candidate.strategy,
+          selector: candidate.selector,
+          fetchArray: true,
+        });
+        return result.elements.map(({id}) => id);
+      },
+      onAlternativeError: (candidate, error) => {
+        log.warn(
+          `Omitting locator candidate '${candidate.candidateId}' after Appium verification failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      },
+    });
+    const currentInspector = getState().inspector;
+    if (
+      currentInspector.selectedElement?.path !== selectedElementPath ||
+      currentInspector.selectedElementId !== selectedElementId
+    ) {
+      throw new EmbeddedProtocolError(
+        'SELECTION_CHANGED',
+        'El elemento seleccionado cambió durante la verificación. Confirma nuevamente el locator actual.',
+      );
+    }
+
+    const payload = {
+      ...primary,
+      ...(selectedElementId ? {elementId: selectedElementId} : {}),
+      ...(selectedElement.tagName ? {tag: selectedElement.tagName} : {}),
+      attributes: selectedElement.attributes || {},
+      candidates,
+      ...(screenshot ? {screenshot} : {}),
+      ...(sourceXML ? {source: sourceXML} : {}),
+    };
 
     emitElementUsed(payload);
     return payload;

@@ -23,7 +23,7 @@ origins are rejected; serve the bundle from an HTTP(S) or registered Electron cu
 
 ## Host Handshake
 
-All messages use channel `appium-inspector:embedded` and protocol version `2`. The Inspector accepts
+All messages use channel `appium-inspector:embedded` and protocol version `3`. The Inspector accepts
 messages only from its parent window and the configured exact origin.
 
 Wait for `appium-inspector:ready`, then send:
@@ -32,7 +32,7 @@ Wait for `appium-inspector:ready`, then send:
 inspectorFrame.contentWindow.postMessage(
   {
     channel: 'appium-inspector:embedded',
-    version: 2,
+    version: 3,
     type: 'appium-inspector:connect',
     payload: {
       serverUrl: 'http://127.0.0.1:4723',
@@ -47,8 +47,10 @@ inspectorFrame.contentWindow.postMessage(
 
 The Inspector responds with `appium-inspector:connected` or `appium-inspector:error`. Selecting an
 element only updates Inspector-local state. When the user explicitly presses **Usar en Recorder**,
-the Inspector emits one `appium-inspector:element-used` message containing the locator strategy and
-value currently shown in the controls:
+the Inspector verifies the locator currently shown in the controls and its existing Inspector-generated
+alternatives against the attached Appium session. The primary locator must return exactly the selected
+WebDriver element; invalid alternatives are omitted. It then emits one `appium-inspector:element-used`
+message:
 
 ```ts
 interface ElementUsedPayload {
@@ -57,10 +59,28 @@ interface ElementUsedPayload {
   elementId?: string;
   tag?: string;
   attributes: Record<string, string>;
+  candidates: Array<{
+    candidateId: string;
+    strategy: string;
+    selector: string;
+    priority: number;
+    stability: 'stable' | 'contextual' | 'structural' | 'manual';
+    sourceReason: string;
+    matchCount: 1;
+    sameElement: true;
+  }>;
   screenshot?: string;
   source?: string;
 }
 ```
+
+`candidates[0]` is always the current manually editable primary locator. Candidate verification uses
+Appium's `findElements` endpoint sequentially, requires exactly one result with the selected WebDriver
+element ID, deduplicates normalized strategy/value pairs, and preserves deterministic stability and
+priority order. At most 50 verified candidates are sent as a defensive limit. Candidate objects are
+strict and never contain screenshots, XML/source excerpts, attribute dumps, capabilities, or
+credentials. The optional top-level `screenshot` and `source` fields remain only for existing UI
+compatibility.
 
 The complete typed protocol is exported from
 `app/common/renderer/embedded/protocol.ts`. Hosts should validate the Inspector message source,

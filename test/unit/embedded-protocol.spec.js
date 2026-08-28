@@ -25,6 +25,17 @@ const validMessage = {
   },
 };
 
+const verifiedCandidate = {
+  candidateId: 'accessibility-id-save',
+  strategy: 'accessibility id',
+  selector: 'Save',
+  priority: 10,
+  stability: 'stable',
+  sourceReason: 'iOS accessibility identifier',
+  matchCount: 1,
+  sameElement: true,
+};
+
 describe('embedded bridge protocol', function () {
   it('validates and normalizes a connection handshake', function () {
     expect(validateConnectMessage(validMessage)).toEqual(validMessage.payload);
@@ -96,21 +107,82 @@ describe('embedded bridge protocol', function () {
         strategy: 'accessibility id',
         selector: 'Save',
         attributes: {name: 'Save'},
+        candidates: [verifiedCandidate],
       }),
     ).toEqual({
       strategy: 'accessibility id',
       selector: 'Save',
       attributes: {name: 'Save'},
+      candidates: [verifiedCandidate],
     });
-    expect(() => validateElementUsedPayload({strategy: 'id', selector: '', attributes: {}})).toThrow(
+    expect(
+      Object.keys(
+        validateElementUsedPayload({
+          strategy: 'accessibility id',
+          selector: 'Save',
+          attributes: {},
+          candidates: [verifiedCandidate],
+        }).candidates[0],
+      ),
+    ).toEqual([
+      'candidateId',
+      'strategy',
+      'selector',
+      'priority',
+      'stability',
+      'sourceReason',
+      'matchCount',
+      'sameElement',
+    ]);
+    expect(() => validateElementUsedPayload({strategy: 'id', selector: '', attributes: {}, candidates: []})).toThrow(
       expect.objectContaining({code: 'INVALID_PAYLOAD'}),
     );
   });
 
+  it.each([
+    [{...verifiedCandidate, matchCount: 2}],
+    [{...verifiedCandidate, sameElement: false}],
+    [{...verifiedCandidate, screenshot: 'forbidden'}],
+    [{...verifiedCandidate, attributes: {name: 'Save'}}],
+  ])('rejects unverified or evidence-bearing candidate metadata', function (candidate) {
+    expect(() =>
+      validateElementUsedPayload({
+        strategy: candidate.strategy,
+        selector: candidate.selector,
+        attributes: {},
+        candidates: [candidate],
+      }),
+    ).toThrow(expect.objectContaining({code: 'INVALID_PAYLOAD'}));
+  });
+
+  it('requires the visible primary first and deduplicates candidate locators', function () {
+    expect(() =>
+      validateElementUsedPayload({
+        strategy: 'id',
+        selector: 'save',
+        attributes: {},
+        candidates: [verifiedCandidate],
+      }),
+    ).toThrow(expect.objectContaining({code: 'INVALID_PAYLOAD'}));
+    expect(() =>
+      validateElementUsedPayload({
+        strategy: verifiedCandidate.strategy,
+        selector: verifiedCandidate.selector,
+        attributes: {},
+        candidates: [verifiedCandidate, {...verifiedCandidate, candidateId: 'duplicate'}],
+      }),
+    ).toThrow(expect.objectContaining({code: 'INVALID_PAYLOAD'}));
+  });
+
   it('rejects element use before the embedded bridge is ready', function () {
     setEmbeddedBridge(null);
-    expect(() => emitElementUsed({strategy: 'id', selector: 'save', attributes: {}})).toThrow(
-      expect.objectContaining({code: 'BRIDGE_NOT_READY'}),
-    );
+    expect(() =>
+      emitElementUsed({
+        strategy: 'accessibility id',
+        selector: 'Save',
+        attributes: {},
+        candidates: [verifiedCandidate],
+      }),
+    ).toThrow(expect.objectContaining({code: 'BRIDGE_NOT_READY'}));
   });
 });

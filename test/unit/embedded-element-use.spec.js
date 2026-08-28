@@ -51,6 +51,25 @@ const createState = (overrides = {}) => ({
   },
 });
 
+const locatorCandidates = [
+  {
+    id: 'id-login',
+    strategy: 'id',
+    selector: 'login',
+    priority: 10,
+    unique: true,
+    reason: 'Direct Android resource identifier',
+  },
+  {
+    id: 'xpath-login',
+    strategy: 'xpath',
+    selector: '//android.widget.Button[@text="Continue"]',
+    priority: 70,
+    unique: true,
+    reason: 'Exact visible text',
+  },
+];
+
 describe('explicit embedded element use', function () {
   let postMessage;
 
@@ -65,15 +84,36 @@ describe('explicit embedded element use', function () {
     vi.useRealTimers();
   });
 
-  it('emits exactly once with the current user-selected strategy and value', function () {
-    const state = createState();
-    const payload = useElementInRecorder('xpath', '  //android.widget.Button[@text="Continue"]  ')(
+  it('emits exactly once with the current user-selected strategy and verified candidates', async function () {
+    const state = createState({
+      selectedElement: {...selectedElement, locatorCandidates},
+      driver: {},
+    });
+    const run = vi.fn().mockResolvedValue({elements: [{id: 'element-123'}]});
+    vi.spyOn(InspectorDriver, 'instance').mockReturnValue({run});
+    const payload = await useElementInRecorder('xpath', '  //android.widget.Button[@text="Continue"]  ')(
       vi.fn(),
       () => state,
     );
 
     expect(payload.strategy).toBe('xpath');
     expect(payload.selector).toBe('//android.widget.Button[@text="Continue"]');
+    expect(payload.candidates[0]).toMatchObject({
+      candidateId: 'xpath-login',
+      strategy: 'xpath',
+      selector: '//android.widget.Button[@text="Continue"]',
+      matchCount: 1,
+      sameElement: true,
+    });
+    expect(payload.candidates.every(({screenshot, source, attributes}) => !screenshot && !source && !attributes)).toBe(
+      true,
+    );
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(1, {
+      strategy: 'xpath',
+      selector: '//android.widget.Button[@text="Continue"]',
+      fetchArray: true,
+    });
     expect(postMessage).toHaveBeenCalledTimes(1);
     expect(postMessage).toHaveBeenCalledWith(
       {
@@ -86,12 +126,27 @@ describe('explicit embedded element use', function () {
     );
   });
 
+  it('blocks emission when the visible primary is not an exact same-element match', async function () {
+    const state = createState({
+      selectedElement: {...selectedElement, locatorCandidates},
+      driver: {},
+    });
+    vi.spyOn(InspectorDriver, 'instance').mockReturnValue({
+      run: vi.fn().mockResolvedValue({elements: [{id: 'different-element'}]}),
+    });
+
+    await expect(useElementInRecorder('id', 'login')(vi.fn(), () => state)).rejects.toMatchObject({
+      code: 'PRIMARY_DIFFERENT_ELEMENT',
+    });
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     [createState({selectedElement: undefined}), 'id', 'login'],
     [createState(), '', 'login'],
     [createState(), 'id', '   '],
-  ])('rejects invalid confirmation state without emitting', function (state, strategy, selector) {
-    expect(() => useElementInRecorder(strategy, selector)(vi.fn(), () => state)).toThrow(
+  ])('rejects invalid confirmation state without emitting', async function (state, strategy, selector) {
+    await expect(useElementInRecorder(strategy, selector)(vi.fn(), () => state)).rejects.toMatchObject(
       expect.objectContaining({code: 'INVALID_SELECTION'}),
     );
     expect(postMessage).not.toHaveBeenCalled();
@@ -119,26 +174,30 @@ describe('explicit embedded element use', function () {
     const setIsSending = vi.fn();
     const setFeedback = vi.fn();
     const isSendingRef = {current: false};
+    const send = vi.fn().mockResolvedValue({candidates: [{}, {}]});
 
     await confirmRecorderSelection({
       isSendingRef,
       selectedElement: state.inspector.selectedElement,
       strategy: 'id',
       selector: 'login',
-      send: vi.fn().mockResolvedValue(undefined),
+      locatorCandidates,
+      send,
       setIsSending,
       setFeedback,
     });
     expect(setFeedback).toHaveBeenLastCalledWith({
       type: 'success',
-      title: 'Elemento enviado al Recorder',
+      title: 'Elemento enviado al Recorder con 1 alternativa verificada',
     });
+    expect(send).toHaveBeenCalledWith('id', 'login', locatorCandidates);
 
     await confirmRecorderSelection({
       isSendingRef,
       selectedElement: state.inspector.selectedElement,
       strategy: 'id',
       selector: 'login',
+      locatorCandidates,
       send: vi.fn().mockRejectedValue(new Error('Host unavailable')),
       setIsSending,
       setFeedback,
@@ -161,6 +220,7 @@ describe('explicit embedded element use', function () {
       selectedElement,
       strategy: 'id',
       selector: 'login',
+      locatorCandidates,
       send,
       setIsSending: vi.fn(),
       setFeedback: vi.fn(),
@@ -170,7 +230,7 @@ describe('explicit embedded element use', function () {
     const duplicateConfirmation = confirmRecorderSelection(options);
     expect(send).toHaveBeenCalledTimes(1);
     await expect(duplicateConfirmation).resolves.toBe(false);
-    finishSend();
+    finishSend({candidates: [{}]});
     await expect(firstConfirmation).resolves.toBe(true);
   });
 
@@ -289,7 +349,7 @@ describe('explicit embedded element use', function () {
 
     expect(state.inspector.selectedElementId).toBe('standalone-element');
     expect(state.inspector.selectedElement.locatorCandidates).toBeUndefined();
-    expect(() => useElementInRecorder('id', 'login')(dispatch, () => state)).toThrow(
+    await expect(useElementInRecorder('id', 'login')(dispatch, () => state)).rejects.toMatchObject(
       expect.objectContaining({code: 'NOT_EMBEDDED_MODE'}),
     );
     expect(postMessage).not.toHaveBeenCalled();

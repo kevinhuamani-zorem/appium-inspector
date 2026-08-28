@@ -1,5 +1,5 @@
 export const EMBEDDED_PROTOCOL_CHANNEL = 'appium-inspector:embedded';
-export const EMBEDDED_PROTOCOL_VERSION = 2;
+export const EMBEDDED_PROTOCOL_VERSION = 3;
 
 export const EMBEDDED_MESSAGE_TYPES = {
   CONNECT: 'appium-inspector:connect',
@@ -10,6 +10,19 @@ export const EMBEDDED_MESSAGE_TYPES = {
 } as const;
 
 export type EmbeddedCapabilities = Record<string, unknown>;
+
+export const EMBEDDED_CANDIDATE_STABILITIES = ['stable', 'contextual', 'structural', 'manual'] as const;
+
+export interface EmbeddedVerifiedLocatorCandidate {
+  candidateId: string;
+  strategy: string;
+  selector: string;
+  priority: number;
+  stability: (typeof EMBEDDED_CANDIDATE_STABILITIES)[number];
+  sourceReason: string;
+  matchCount: 1;
+  sameElement: true;
+}
 
 export interface EmbeddedConnectPayload {
   serverUrl: string;
@@ -24,6 +37,7 @@ export interface EmbeddedElementUsedPayload {
   elementId?: string;
   tag?: string;
   attributes: Record<string, string>;
+  candidates: EmbeddedVerifiedLocatorCandidate[];
   screenshot?: string;
   source?: string;
 }
@@ -65,6 +79,46 @@ const optionalString = (value: unknown, field: string): string | undefined => {
   return value;
 };
 
+const CANDIDATE_FIELDS = new Set([
+  'candidateId',
+  'strategy',
+  'selector',
+  'priority',
+  'stability',
+  'sourceReason',
+  'matchCount',
+  'sameElement',
+]);
+
+function validateLocatorCandidate(data: unknown, index: number): EmbeddedVerifiedLocatorCandidate {
+  const field = `candidates[${index}]`;
+  if (!isPlainObject(data) || Object.keys(data).some((key) => !CANDIDATE_FIELDS.has(key))) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', `'${field}' must use the strict verified candidate shape`);
+  }
+  if (!Number.isInteger(data.priority) || (data.priority as number) < 0) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', `'${field}.priority' must be a non-negative integer`);
+  }
+  if (
+    typeof data.stability !== 'string' ||
+    !EMBEDDED_CANDIDATE_STABILITIES.includes(data.stability as EmbeddedVerifiedLocatorCandidate['stability'])
+  ) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', `'${field}.stability' is unsupported`);
+  }
+  if (data.matchCount !== 1 || data.sameElement !== true) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', `'${field}' must prove one exact same-element match`);
+  }
+  return {
+    candidateId: requireNonEmptyString(data.candidateId, `${field}.candidateId`),
+    strategy: requireNonEmptyString(data.strategy, `${field}.strategy`),
+    selector: requireNonEmptyString(data.selector, `${field}.selector`),
+    priority: data.priority as number,
+    stability: data.stability as EmbeddedVerifiedLocatorCandidate['stability'],
+    sourceReason: requireNonEmptyString(data.sourceReason, `${field}.sourceReason`),
+    matchCount: 1,
+    sameElement: true,
+  };
+}
+
 export function validateElementUsedPayload(data: unknown): EmbeddedElementUsedPayload {
   if (!isPlainObject(data) || !isPlainObject(data.attributes)) {
     throw new EmbeddedProtocolError('INVALID_PAYLOAD', "Element-used payload and 'attributes' must be objects");
@@ -72,13 +126,32 @@ export function validateElementUsedPayload(data: unknown): EmbeddedElementUsedPa
   if (Object.values(data.attributes).some((value) => typeof value !== 'string')) {
     throw new EmbeddedProtocolError('INVALID_PAYLOAD', "'attributes' values must be strings");
   }
+  if (!Array.isArray(data.candidates) || data.candidates.length === 0) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', "'candidates' must be a non-empty array");
+  }
+  const candidates = data.candidates.map(validateLocatorCandidate);
+  const strategy = requireNonEmptyString(data.strategy, 'strategy');
+  const selector = requireNonEmptyString(data.selector, 'selector');
+  if (candidates[0].strategy !== strategy || candidates[0].selector !== selector) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', 'The first candidate must be the visible primary locator');
+  }
+  const identities = candidates.map(
+    (candidate) => `${candidate.strategy.trim().toLowerCase()}\0${candidate.selector.trim()}`,
+  );
+  if (
+    new Set(identities).size !== identities.length ||
+    new Set(candidates.map(({candidateId}) => candidateId)).size !== candidates.length
+  ) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', "'candidates' must contain unique locators and candidate IDs");
+  }
 
   return {
-    strategy: requireNonEmptyString(data.strategy, 'strategy'),
-    selector: requireNonEmptyString(data.selector, 'selector'),
+    strategy,
+    selector,
     ...optionalPayloadField('elementId', optionalString(data.elementId, 'elementId')),
     ...optionalPayloadField('tag', optionalString(data.tag, 'tag')),
     attributes: data.attributes as Record<string, string>,
+    candidates,
     ...optionalPayloadField('screenshot', optionalString(data.screenshot, 'screenshot')),
     ...optionalPayloadField('source', optionalString(data.source, 'source')),
   };

@@ -21,6 +21,7 @@ export const confirmRecorderSelection = async ({
   selectedElement,
   strategy,
   selector,
+  locatorCandidates,
   send,
   setIsSending,
   setFeedback,
@@ -34,10 +35,14 @@ export const confirmRecorderSelection = async ({
   }
 
   setIsSending(true);
-  setFeedback(null);
+  setFeedback({type: 'info', title: 'Verificando locators con la sesión activa de Appium…'});
   try {
-    await send(strategy, selector);
-    setFeedback({type: 'success', title: 'Elemento enviado al Recorder'});
+    const payload = await send(strategy, selector, locatorCandidates);
+    const alternativeCount = Math.max(0, payload.candidates.length - 1);
+    setFeedback({
+      type: 'success',
+      title: `Elemento enviado al Recorder con ${alternativeCount} alternativa${alternativeCount === 1 ? '' : 's'} verificada${alternativeCount === 1 ? '' : 's'}`,
+    });
     return true;
   } catch (error) {
     setFeedback({type: 'error', title: error.message});
@@ -124,6 +129,7 @@ const EmbeddedRecorderSelection = ({
       selectedElement,
       strategy,
       selector,
+      locatorCandidates,
       send: confirmElementInRecorder,
       setIsSending,
       setFeedback,
