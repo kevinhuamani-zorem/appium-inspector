@@ -23,7 +23,7 @@ origins are rejected; serve the bundle from an HTTP(S) or registered Electron cu
 
 ## Host Handshake
 
-All messages use channel `appium-inspector:embedded` and protocol version `1`. The Inspector accepts
+All messages use channel `appium-inspector:embedded` and protocol version `2`. The Inspector accepts
 messages only from its parent window and the configured exact origin.
 
 Wait for `appium-inspector:ready`, then send:
@@ -32,7 +32,7 @@ Wait for `appium-inspector:ready`, then send:
 inspectorFrame.contentWindow.postMessage(
   {
     channel: 'appium-inspector:embedded',
-    version: 1,
+    version: 2,
     type: 'appium-inspector:connect',
     payload: {
       serverUrl: 'http://127.0.0.1:4723',
@@ -46,10 +46,12 @@ inspectorFrame.contentWindow.postMessage(
 ```
 
 The Inspector responds with `appium-inspector:connected` or `appium-inspector:error`. Selecting an
-element emits `appium-inspector:element-selected`:
+element only updates Inspector-local state. When the user explicitly presses **Usar en Recorder**,
+the Inspector emits one `appium-inspector:element-used` message containing the locator strategy and
+value currently shown in the controls:
 
 ```ts
-interface ElementSelectedPayload {
+interface ElementUsedPayload {
   strategy: string;
   selector: string;
   elementId?: string;

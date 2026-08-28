@@ -1,12 +1,12 @@
 export const EMBEDDED_PROTOCOL_CHANNEL = 'appium-inspector:embedded';
-export const EMBEDDED_PROTOCOL_VERSION = 1;
+export const EMBEDDED_PROTOCOL_VERSION = 2;
 
 export const EMBEDDED_MESSAGE_TYPES = {
   CONNECT: 'appium-inspector:connect',
   READY: 'appium-inspector:ready',
   CONNECTED: 'appium-inspector:connected',
   ERROR: 'appium-inspector:error',
-  ELEMENT_SELECTED: 'appium-inspector:element-selected',
+  ELEMENT_USED: 'appium-inspector:element-used',
 } as const;
 
 export type EmbeddedCapabilities = Record<string, unknown>;
@@ -18,7 +18,7 @@ export interface EmbeddedConnectPayload {
   platform: string;
 }
 
-export interface EmbeddedElementSelectionPayload {
+export interface EmbeddedElementUsedPayload {
   strategy: string;
   selector: string;
   elementId?: string;
@@ -54,6 +54,39 @@ const requireNonEmptyString = (value: unknown, field: string): string => {
   }
   return value;
 };
+
+const optionalString = (value: unknown, field: string): string | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', `'${field}' must be a string`);
+  }
+  return value;
+};
+
+export function validateElementUsedPayload(data: unknown): EmbeddedElementUsedPayload {
+  if (!isPlainObject(data) || !isPlainObject(data.attributes)) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', "Element-used payload and 'attributes' must be objects");
+  }
+  if (Object.values(data.attributes).some((value) => typeof value !== 'string')) {
+    throw new EmbeddedProtocolError('INVALID_PAYLOAD', "'attributes' values must be strings");
+  }
+
+  return {
+    strategy: requireNonEmptyString(data.strategy, 'strategy'),
+    selector: requireNonEmptyString(data.selector, 'selector'),
+    ...optionalPayloadField('elementId', optionalString(data.elementId, 'elementId')),
+    ...optionalPayloadField('tag', optionalString(data.tag, 'tag')),
+    attributes: data.attributes as Record<string, string>,
+    ...optionalPayloadField('screenshot', optionalString(data.screenshot, 'screenshot')),
+    ...optionalPayloadField('source', optionalString(data.source, 'source')),
+  };
+}
+
+function optionalPayloadField<T>(field: string, value: T | undefined): Record<string, T> {
+  return value === undefined ? {} : {[field]: value};
+}
 
 export function validateConnectMessage(data: unknown): EmbeddedConnectPayload {
   if (!isPlainObject(data)) {
@@ -139,7 +172,7 @@ type HostMessageType =
   | typeof EMBEDDED_MESSAGE_TYPES.READY
   | typeof EMBEDDED_MESSAGE_TYPES.CONNECTED
   | typeof EMBEDDED_MESSAGE_TYPES.ERROR
-  | typeof EMBEDDED_MESSAGE_TYPES.ELEMENT_SELECTED;
+  | typeof EMBEDDED_MESSAGE_TYPES.ELEMENT_USED;
 
 export interface EmbeddedBridge {
   post<TPayload>(type: HostMessageType, payload?: TPayload): void;
@@ -167,6 +200,9 @@ export function setEmbeddedBridge(bridge: EmbeddedBridge | null): void {
   activeBridge = bridge;
 }
 
-export function emitElementSelected(payload: EmbeddedElementSelectionPayload): void {
-  activeBridge?.post(EMBEDDED_MESSAGE_TYPES.ELEMENT_SELECTED, payload);
+export function emitElementUsed(payload: EmbeddedElementUsedPayload): void {
+  if (!activeBridge) {
+    throw new EmbeddedProtocolError('BRIDGE_NOT_READY', 'The embedded host connection is not ready');
+  }
+  activeBridge.post(EMBEDDED_MESSAGE_TYPES.ELEMENT_USED, validateElementUsedPayload(payload));
 }

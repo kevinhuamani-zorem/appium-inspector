@@ -16,6 +16,19 @@
   gap: 8px;
 }
 
+.recorderSelection,
+.recorderLocatorControls {
+  width: 100%;
+}
+
+.recorderLocatorControls :global(.ant-select) {
+  min-width: 140px;
+}
+
+.recorderLocatorControls :global(.ant-input) {
+  min-width: 120px;
+}
+
 .elementKeyInputActions {
   max-width: 400px;
   flex: 1;

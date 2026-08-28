@@ -2,7 +2,7 @@ import sanitize from 'sanitize-filename';
 
 import {SAVED_CLIENT_FRAMEWORK, SET_SAVED_GESTURES} from '../../shared/setting-defs.js';
 import {APP_MODE, NATIVE_APP, UNKNOWN_ERROR} from '../constants/session-inspector.js';
-import {emitElementSelected} from '../embedded/protocol.js';
+import {EmbeddedProtocolError, emitElementUsed} from '../embedded/protocol.js';
 import {shouldTerminateSession} from '../embedded/session-ownership.js';
 import i18n from '../i18next.js';
 import InspectorDriver from '../lib/appium/inspector-driver.js';
@@ -148,22 +148,6 @@ function prepareElementSelection(path, dispatch, getState) {
   return strategyMap;
 }
 
-function emitEmbeddedElementSelection(strategy, selector, elementId, getState) {
-  const {isEmbeddedMode, screenshot, sourceXML, selectedElement} = getState().inspector;
-  if (!isEmbeddedMode || !strategy || !selector) {
-    return;
-  }
-  emitElementSelected({
-    strategy,
-    selector,
-    ...(elementId ? {elementId} : {}),
-    ...(selectedElement.tagName ? {tag: selectedElement.tagName} : {}),
-    attributes: selectedElement.attributes || {},
-    ...(screenshot ? {screenshot} : {}),
-    ...(sourceXML ? {source: sourceXML} : {}),
-  });
-}
-
 // Calls Appium's findElement for each candidate strategy/selector until one succeeds,
 // caches the resulting elementId, and returns it (or null if none of them worked).
 // Shared by selectElement (debounced below) and tapElement (called immediately).
@@ -180,16 +164,11 @@ async function resolveElementId(strategyMap, dispatch, getState, path) {
     // (check first that the selectedElementPath didn't change, to avoid race conditions)
     if (elementId && getState().inspector.selectedElementPath === path) {
       dispatch({type: SET_SELECTED_ELEMENT_ID, elementId});
-      emitEmbeddedElementSelection(strategy, selector, elementId, getState);
       return elementId;
     }
   }
 
   dispatch({type: SET_INTERACTIONS_NOT_AVAILABLE});
-  if (getState().inspector.selectedElementPath === path) {
-    const [strategy, selector] = strategyMap[0] || [];
-    emitEmbeddedElementSelection(strategy, selector, null, getState);
-  }
   return null;
 }
 
@@ -210,6 +189,40 @@ export function selectElement(path) {
 export function unselectElement() {
   return (dispatch) => {
     dispatch({type: UNSELECT_ELEMENT});
+  };
+}
+
+export function useElementInRecorder(strategy, selector) {
+  return (_dispatch, getState) => {
+    const {isEmbeddedMode, screenshot, sourceXML, selectedElement, selectedElementId} = getState().inspector;
+    if (!isEmbeddedMode) {
+      throw new EmbeddedProtocolError('NOT_EMBEDDED_MODE', 'Recorder transfer is only available in embedded mode');
+    }
+    if (!selectedElement?.path || typeof strategy !== 'string' || typeof selector !== 'string') {
+      throw new EmbeddedProtocolError(
+        'INVALID_SELECTION',
+        'Select an element and provide a locator strategy and value',
+      );
+    }
+
+    const payload = {
+      strategy: strategy.trim(),
+      selector: selector.trim(),
+      ...(selectedElementId ? {elementId: selectedElementId} : {}),
+      ...(selectedElement.tagName ? {tag: selectedElement.tagName} : {}),
+      attributes: selectedElement.attributes || {},
+      ...(screenshot ? {screenshot} : {}),
+      ...(sourceXML ? {source: sourceXML} : {}),
+    };
+    if (!payload.strategy || !payload.selector) {
+      throw new EmbeddedProtocolError(
+        'INVALID_SELECTION',
+        'Select an element and provide a locator strategy and value',
+      );
+    }
+
+    emitElementUsed(payload);
+    return payload;
   };
 }
 

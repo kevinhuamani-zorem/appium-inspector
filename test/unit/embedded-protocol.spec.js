@@ -5,8 +5,11 @@ import {
   EMBEDDED_PROTOCOL_CHANNEL,
   EMBEDDED_PROTOCOL_VERSION,
   createEmbeddedBridge,
+  emitElementUsed,
   resolveHostOrigin,
+  setEmbeddedBridge,
   validateConnectMessage,
+  validateElementUsedPayload,
   validateHostMessage,
 } from '../../app/common/renderer/embedded/protocol.js';
 
@@ -28,7 +31,7 @@ describe('embedded bridge protocol', function () {
   });
 
   it.each([
-    [{...validMessage, version: 2}, 'UNSUPPORTED_PROTOCOL'],
+    [{...validMessage, version: 1}, 'UNSUPPORTED_PROTOCOL'],
     [{...validMessage, payload: {...validMessage.payload, sessionId: ''}}, 'INVALID_PAYLOAD'],
     [{...validMessage, payload: {...validMessage.payload, capabilities: []}}, 'INVALID_PAYLOAD'],
     [{...validMessage, payload: {...validMessage.payload, serverUrl: 'file:///tmp/appium'}}, 'INVALID_PAYLOAD'],
@@ -84,6 +87,30 @@ describe('embedded bridge protocol', function () {
         type: EMBEDDED_MESSAGE_TYPES.READY,
       },
       'app://visual-recorder',
+    );
+  });
+
+  it('validates an explicit element-used payload', function () {
+    expect(
+      validateElementUsedPayload({
+        strategy: 'accessibility id',
+        selector: 'Save',
+        attributes: {name: 'Save'},
+      }),
+    ).toEqual({
+      strategy: 'accessibility id',
+      selector: 'Save',
+      attributes: {name: 'Save'},
+    });
+    expect(() => validateElementUsedPayload({strategy: 'id', selector: '', attributes: {}})).toThrow(
+      expect.objectContaining({code: 'INVALID_PAYLOAD'}),
+    );
+  });
+
+  it('rejects element use before the embedded bridge is ready', function () {
+    setEmbeddedBridge(null);
+    expect(() => emitElementUsed({strategy: 'id', selector: 'save', attributes: {}})).toThrow(
+      expect.objectContaining({code: 'BRIDGE_NOT_READY'}),
     );
   });
 });

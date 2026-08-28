@@ -1,5 +1,6 @@
 import {Space, Spin} from 'antd';
 
+import EmbeddedRecorderSelection from './EmbeddedRecorderSelection.jsx';
 import InteractionsNotAvailableMessage from './InteractionsNotAvailableMessage.jsx';
 import SelectedElementActions from './SelectedElementActions.jsx';
 import SelectedElementAttributesTable from './SelectedElementAttributesTable.jsx';
@@ -34,6 +35,7 @@ const SelectedElement = (props) => {
     collapsible,
     collapsed,
     onToggleCollapse,
+    isEmbeddedMode,
   } = props;
 
   const elementActionsDisabled = selectedElementSearchInProgress || isFindingElementsTimes;
@@ -70,6 +72,7 @@ const SelectedElement = (props) => {
       <Space className={inspectorStyles.spaceContainer} orientation="vertical" size="middle">
         <SnapshotMaxDepthReachedMessage selectedElementPath={selectedElementPath} sessionSettings={sessionSettings} />
         <InteractionsNotAvailableMessage elementInteractionsNotAvailable={elementInteractionsNotAvailable} />
+        {isEmbeddedMode && <EmbeddedRecorderSelection {...props} />}
         <SelectedElementActions
           {...props}
           elementActionsDisabled={elementActionsDisabled}
