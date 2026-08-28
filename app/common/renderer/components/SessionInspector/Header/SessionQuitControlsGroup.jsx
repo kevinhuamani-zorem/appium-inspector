@@ -5,7 +5,7 @@ import {useTranslation} from 'react-i18next';
 /**
  * Controls used to quit the session.
  */
-const SessionQuitControlsGroup = ({quitSessionAndReturn}) => {
+const SessionQuitControlsGroup = ({quitSessionAndReturn, isSessionExternallyOwned = false}) => {
   const {t} = useTranslation();
 
   return (
@@ -17,9 +17,11 @@ const SessionQuitControlsGroup = ({quitSessionAndReturn}) => {
           onClick={() => quitSessionAndReturn({detachOnly: true})}
         />
       </Tooltip>
-      <Tooltip title={t('Quit Session')}>
-        <Button id="btnClose" icon={<IconX size={18} />} onClick={quitSessionAndReturn} />
-      </Tooltip>
+      {!isSessionExternallyOwned && (
+        <Tooltip title={t('Quit Session')}>
+          <Button id="btnClose" icon={<IconX size={18} />} onClick={quitSessionAndReturn} />
+        </Tooltip>
+      )}
     </Space.Compact>
   );
 };

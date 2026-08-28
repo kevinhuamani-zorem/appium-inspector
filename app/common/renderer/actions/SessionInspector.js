@@ -2,6 +2,8 @@ import sanitize from 'sanitize-filename';
 
 import {SAVED_CLIENT_FRAMEWORK, SET_SAVED_GESTURES} from '../../shared/setting-defs.js';
 import {APP_MODE, NATIVE_APP, UNKNOWN_ERROR} from '../constants/session-inspector.js';
+import {emitElementSelected} from '../embedded/protocol.js';
+import {shouldTerminateSession} from '../embedded/session-ownership.js';
 import i18n from '../i18next.js';
 import InspectorDriver from '../lib/appium/inspector-driver.js';
 import {CLIENT_FRAMEWORK_MAP} from '../lib/client-frameworks/map.js';
@@ -146,6 +148,22 @@ function prepareElementSelection(path, dispatch, getState) {
   return strategyMap;
 }
 
+function emitEmbeddedElementSelection(strategy, selector, elementId, getState) {
+  const {isEmbeddedMode, screenshot, sourceXML, selectedElement} = getState().inspector;
+  if (!isEmbeddedMode || !strategy || !selector) {
+    return;
+  }
+  emitElementSelected({
+    strategy,
+    selector,
+    ...(elementId ? {elementId} : {}),
+    ...(selectedElement.tagName ? {tag: selectedElement.tagName} : {}),
+    attributes: selectedElement.attributes || {},
+    ...(screenshot ? {screenshot} : {}),
+    ...(sourceXML ? {source: sourceXML} : {}),
+  });
+}
+
 // Calls Appium's findElement for each candidate strategy/selector until one succeeds,
 // caches the resulting elementId, and returns it (or null if none of them worked).
 // Shared by selectElement (debounced below) and tapElement (called immediately).
@@ -162,11 +180,16 @@ async function resolveElementId(strategyMap, dispatch, getState, path) {
     // (check first that the selectedElementPath didn't change, to avoid race conditions)
     if (elementId && getState().inspector.selectedElementPath === path) {
       dispatch({type: SET_SELECTED_ELEMENT_ID, elementId});
+      emitEmbeddedElementSelection(strategy, selector, elementId, getState);
       return elementId;
     }
   }
 
   dispatch({type: SET_INTERACTIONS_NOT_AVAILABLE});
+  if (getState().inspector.selectedElementPath === path) {
+    const [strategy, selector] = strategyMap[0] || [];
+    emitEmbeddedElementSelection(strategy, selector, null, getState);
+  }
   return null;
 }
 
@@ -226,6 +249,10 @@ export function unselectCentroid() {
  */
 export function applyClientMethod(params) {
   return async (dispatch, getState) => {
+    if (params.methodName === 'deleteSession' && getState().inspector.isSessionExternallyOwned) {
+      log.warn('Blocked deleteSession for an externally owned session');
+      return;
+    }
     const isRecording =
       params.methodName !== 'deleteSession' &&
       params.methodName !== 'getPageSource' &&
@@ -337,7 +364,7 @@ export function quitSession({reason, manualQuit = true, detachOnly = false} = {}
   return async (dispatch, getState) => {
     const killAction = killKeepAliveLoop();
     killAction(dispatch, getState);
-    if (!detachOnly) {
+    if (shouldTerminateSession({...getState().inspector, detachOnly})) {
       const applyAction = applyClientMethod({methodName: 'deleteSession'});
       await applyAction(dispatch, getState);
     }
@@ -398,7 +425,15 @@ export function toggleShowBoilerplate() {
   };
 }
 
-export function setSessionDetails({serverDetails, driver, sessionCaps, appMode, isUsingMjpegMode}) {
+export function setSessionDetails({
+  serverDetails,
+  driver,
+  sessionCaps,
+  appMode,
+  isUsingMjpegMode,
+  isSessionExternallyOwned = false,
+  isEmbeddedMode = false,
+}) {
   return (dispatch) => {
     dispatch({
       type: SET_SESSION_DETAILS,
@@ -407,6 +442,8 @@ export function setSessionDetails({serverDetails, driver, sessionCaps, appMode, 
       sessionCaps,
       appMode,
       isUsingMjpegMode,
+      isSessionExternallyOwned,
+      isEmbeddedMode,
     });
   };
 }
@@ -922,7 +959,7 @@ export function callClientMethod(params) {
       return res;
     } catch (error) {
       log.error(error);
-      if (getState().inspector.autoSessionRestart) {
+      if (getState().inspector.autoSessionRestart && !getState().inspector.isSessionExternallyOwned) {
         const restartSes = restartSession(error, params);
         return await restartSes(dispatch, getState);
       }

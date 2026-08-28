@@ -122,6 +122,8 @@ const INITIAL_STATE = {
   showSourceAttrs: false,
   isUploadingGestureFiles: false,
   autoSessionRestart: false,
+  isSessionExternallyOwned: false,
+  isEmbeddedMode: false,
 };
 
 let nextState;
@@ -294,6 +296,8 @@ export default function inspector(state = INITIAL_STATE, action) {
         automationName: automationName && automationName.toLowerCase(),
         appMode: action.appMode,
         isUsingMjpegMode: action.isUsingMjpegMode,
+        isSessionExternallyOwned: action.isSessionExternallyOwned,
+        isEmbeddedMode: action.isEmbeddedMode,
       };
     }
 
