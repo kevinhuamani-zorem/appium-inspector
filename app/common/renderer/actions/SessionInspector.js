@@ -12,6 +12,7 @@ import {debounce, isEmpty, omit} from '../utils/common.js';
 import {downloadFile, readTextFromUploadedFiles} from '../utils/file-handling.js';
 import {parseGestureFileContents} from '../utils/gesturefile-parsing.js';
 import {getSuggestedLocators} from '../utils/locator-generation/common.js';
+import {getEmbeddedLocatorCandidates} from '../utils/locator-generation/embedded-candidates.js';
 import {getOptimalXPath} from '../utils/locator-generation/xpath.js';
 import {log} from '../utils/logger.js';
 import {notification} from '../utils/notification.js';
@@ -122,7 +123,7 @@ const NO_NEW_COMMAND_LIMIT = 24 * 60 * 60 * 1000; // Set timeout to 24 hours
 // Shared by selectElement and tapElement.
 // Returns the computed strategy map.
 function prepareElementSelection(path, dispatch, getState) {
-  const {sourceJSON, sourceXML, expandedPaths, currentContext, automationName} = getState().inspector;
+  const {sourceJSON, sourceXML, expandedPaths, currentContext, automationName, isEmbeddedMode} = getState().inspector;
   const isNative = currentContext === NATIVE_APP;
   // Set the selected element in the source tree
   const selectedElement = findJSONElementByPath(path, sourceJSON);
@@ -143,7 +144,10 @@ function prepareElementSelection(path, dispatch, getState) {
 
   // Calculate the recommended locator strategies
   const strategyMap = getSuggestedLocators(selectedElement, sourceXML, isNative, automationName);
-  dispatch({type: SET_OPTIMAL_LOCATORS, strategyMap});
+  const locatorCandidates = isEmbeddedMode
+    ? getEmbeddedLocatorCandidates(selectedElement, sourceXML, isNative, automationName)
+    : undefined;
+  dispatch({type: SET_OPTIMAL_LOCATORS, strategyMap, locatorCandidates});
 
   return strategyMap;
 }

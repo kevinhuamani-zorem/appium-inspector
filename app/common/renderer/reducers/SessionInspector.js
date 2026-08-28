@@ -183,6 +183,7 @@ export default function inspector(state = INITIAL_STATE, action) {
         selectedElement: {
           ...state.selectedElement,
           strategyMap: action.strategyMap,
+          ...(action.locatorCandidates ? {locatorCandidates: action.locatorCandidates} : {}),
         },
       };
 

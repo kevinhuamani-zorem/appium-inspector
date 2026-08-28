@@ -199,6 +199,7 @@ describe('explicit embedded element use', function () {
         state.inspector.selectedElementPath = action.selectedElement.path;
       } else if (action.type === SET_OPTIMAL_LOCATORS) {
         state.inspector.selectedElement.strategyMap = action.strategyMap;
+        state.inspector.selectedElement.locatorCandidates = action.locatorCandidates;
       } else if (action.type === SET_SELECTED_ELEMENT_ID) {
         state.inspector.selectedElementId = action.elementId;
       }
@@ -209,6 +210,9 @@ describe('explicit embedded element use', function () {
 
     expect(state.inspector.selectedElementPath).toBe('0');
     expect(state.inspector.selectedElementId).toBe('resolved-element');
+    expect(state.inspector.selectedElement.locatorCandidates.length).toBeGreaterThan(
+      state.inspector.selectedElement.strategyMap.length,
+    );
     expect(postMessage).not.toHaveBeenCalled();
   });
 
@@ -237,6 +241,7 @@ describe('explicit embedded element use', function () {
         state.inspector.selectedElementPath = action.selectedElement.path;
       } else if (action.type === SET_OPTIMAL_LOCATORS) {
         state.inspector.selectedElement.strategyMap = action.strategyMap;
+        state.inspector.selectedElement.locatorCandidates = action.locatorCandidates;
       }
     });
 
@@ -244,6 +249,7 @@ describe('explicit embedded element use', function () {
     await vi.runAllTimersAsync();
 
     expect(state.inspector.selectedElementId).toBeNull();
+    expect(state.inspector.selectedElement.locatorCandidates).toEqual(expect.any(Array));
     expect(postMessage).not.toHaveBeenCalled();
   });
 
@@ -282,6 +288,7 @@ describe('explicit embedded element use', function () {
     await vi.runAllTimersAsync();
 
     expect(state.inspector.selectedElementId).toBe('standalone-element');
+    expect(state.inspector.selectedElement.locatorCandidates).toBeUndefined();
     expect(() => useElementInRecorder('id', 'login')(dispatch, () => state)).toThrow(
       expect.objectContaining({code: 'NOT_EMBEDDED_MODE'}),
     );

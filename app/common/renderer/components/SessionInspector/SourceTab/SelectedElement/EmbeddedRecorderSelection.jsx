@@ -48,30 +48,75 @@ export const confirmRecorderSelection = async ({
   }
 };
 
-const EmbeddedRecorderSelection = ({
-  selectedElement,
-  selectedElementPath,
-  useElementInRecorder: confirmElementInRecorder,
-}) => {
-  const initialLocator = selectedElement.strategyMap[0] || ['', ''];
-  const [strategy, setStrategy] = useState(initialLocator[0]);
-  const [selector, setSelector] = useState(initialLocator[1]);
-  const [isSending, setIsSending] = useState(false);
+export const selectionForCandidate = (candidate) => ({
+  strategy: candidate?.strategy || '',
+  selector: candidate?.selector || '',
+});
+
+export const selectionForStrategy = (candidates, strategy) =>
+  selectionForCandidate(candidates.find((candidate) => candidate.strategy === strategy));
+
+export const applyRecorderSelection = (selection, {setStrategy, setSelector, setFeedback}) => {
+  setStrategy(selection.strategy);
+  setSelector(selection.selector);
+  setFeedback(null);
+};
+
+export const applyRecorderSelectorEdit = (selector, {setSelector, setFeedback}) => {
+  setSelector(selector);
+  setFeedback(null);
+};
+
+export const useRecorderLocatorSelection = (candidates, selectedElementPath) => {
+  const initialSelection = selectionForCandidate(candidates[0]);
+  const [strategy, setStrategy] = useState(initialSelection.strategy);
+  const [selector, setSelector] = useState(initialSelection.selector);
   const [feedback, setFeedback] = useState(null);
-  const isSendingRef = useRef(false);
 
   useEffect(() => {
-    const [nextStrategy, nextSelector] = selectedElement.strategyMap[0] || ['', ''];
-    setStrategy(nextStrategy);
-    setSelector(nextSelector);
-    setFeedback(null);
-  }, [selectedElementPath, selectedElement.strategyMap]);
+    const nextSelection = selectionForCandidate(candidates[0]);
+    applyRecorderSelection(nextSelection, {setStrategy, setSelector, setFeedback});
+  }, [candidates, selectedElementPath]);
 
-  const onStrategyChange = (nextStrategy) => {
-    setStrategy(nextStrategy);
-    setSelector(selectedElement.strategyMap.find(([candidate]) => candidate === nextStrategy)?.[1] || '');
-    setFeedback(null);
+  const selectCandidate = (candidate) => {
+    applyRecorderSelection(selectionForCandidate(candidate), {setStrategy, setSelector, setFeedback});
   };
+  const selectStrategy = (nextStrategy) => {
+    const nextSelection = selectionForStrategy(candidates, nextStrategy);
+    applyRecorderSelection({...nextSelection, strategy: nextStrategy}, {setStrategy, setSelector, setFeedback});
+  };
+  const editSelector = (nextSelector) => {
+    applyRecorderSelectorEdit(nextSelector, {setSelector, setFeedback});
+  };
+  const activeCandidate = candidates.find(
+    (candidate) => candidate.strategy === strategy && candidate.selector === selector,
+  );
+
+  return {
+    strategy,
+    selector,
+    feedback,
+    setFeedback,
+    selectCandidate,
+    selectStrategy,
+    editSelector,
+    activeCandidateId: activeCandidate?.id,
+  };
+};
+
+const EmbeddedRecorderSelection = ({
+  selectedElement,
+  useElementInRecorder: confirmElementInRecorder,
+  locatorSelection,
+  locatorCandidates,
+}) => {
+  const [isSending, setIsSending] = useState(false);
+  const isSendingRef = useRef(false);
+  const {strategy, selector, feedback, setFeedback, selectStrategy, editSelector} = locatorSelection;
+  const strategyOptions = [...new Set(locatorCandidates.map((candidate) => candidate.strategy))].map((value) => ({
+    label: value,
+    value,
+  }));
 
   const onUse = () =>
     confirmRecorderSelection({
@@ -90,15 +135,14 @@ const EmbeddedRecorderSelection = ({
         <Select
           aria-label="Estrategia del locator"
           value={strategy}
-          options={selectedElement.strategyMap.map(([value]) => ({label: value, value}))}
-          onChange={onStrategyChange}
+          options={strategyOptions}
+          onChange={selectStrategy}
         />
         <Input
           aria-label="Valor del locator"
           value={selector}
           onChange={(event) => {
-            setSelector(event.target.value);
-            setFeedback(null);
+            editSelector(event.target.value);
           }}
         />
         <Button
