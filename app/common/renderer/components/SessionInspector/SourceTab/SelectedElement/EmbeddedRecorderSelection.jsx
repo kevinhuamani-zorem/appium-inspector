@@ -177,25 +177,26 @@ const EmbeddedRecorderSelection = ({
       </Space.Compact>
       {feedback && (
         <Alert
+          className={feedback.matchedElementId ? styles.recorderConfirmationAlert : undefined}
           showIcon
           type={feedback.type}
           title={feedback.title}
-          description={feedback.description}
-          action={
+          description={
             feedback.matchedElementId ? (
-              <Space size="small">
-                <Button
-                  type="primary"
-                  loading={isSending}
-                  onClick={() => onUse(feedback.matchedElementId)}
-                >
-                  Usar elemento encontrado
-                </Button>
-                <Button disabled={isSending} onClick={() => setFeedback(null)}>
-                  Seguir editando
-                </Button>
-              </Space>
-            ) : undefined
+              <div className={styles.recorderConfirmationContent}>
+                <span>{feedback.description}</span>
+                <div className={styles.recorderConfirmationActions}>
+                  <Button type="primary" loading={isSending} onClick={() => onUse(feedback.matchedElementId)}>
+                    Usar elemento encontrado
+                  </Button>
+                  <Button disabled={isSending} onClick={() => setFeedback(null)}>
+                    Seguir editando
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              feedback.description
+            )
           }
         />
       )}

@@ -29,6 +29,39 @@
   min-width: 120px;
 }
 
+.recorderConfirmationAlert :global(.ant-alert-content) {
+  min-width: 0;
+}
+
+.recorderConfirmationContent {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.recorderConfirmationActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recorderConfirmationActions :global(.ant-btn) {
+  height: auto;
+  min-height: 32px;
+  max-width: 100%;
+  white-space: normal;
+}
+
+@media (max-width: 680px) {
+  .recorderConfirmationActions {
+    flex-direction: column;
+  }
+
+  .recorderConfirmationActions :global(.ant-btn) {
+    width: 100%;
+  }
+}
+
 .elementKeyInputActions {
   max-width: 400px;
   flex: 1;
