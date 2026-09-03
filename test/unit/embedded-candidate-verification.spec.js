@@ -137,6 +137,41 @@ describe('embedded locator candidate verification', function () {
     ).rejects.toMatchObject({code});
   });
 
+  it('requires confirmation before adopting the unique element found by a manual locator', async function () {
+    const findElements = vi.fn().mockResolvedValue(['manual-target']);
+    const input = {
+      primary: {strategy: 'xpath', selector: '//*[@content-desc="Manual target"]'},
+      proposedCandidates: candidates,
+      selectedElementId: 'selected-element',
+      findElements,
+    };
+
+    await expect(verifyLocatorCandidates(input)).rejects.toMatchObject({
+      code: 'MANUAL_ELEMENT_CONFIRMATION_REQUIRED',
+      selectedElementId: 'selected-element',
+      matchedElementId: 'manual-target',
+    });
+
+    const verified = await verifyLocatorCandidates({...input, adoptedElementId: 'manual-target'});
+    expect(verified[0]).toMatchObject({
+      stability: 'manual',
+      matchCount: 1,
+      sameElement: true,
+    });
+  });
+
+  it('rejects adoption when the manual locator no longer finds the confirmed element', async function () {
+    await expect(
+      verifyLocatorCandidates({
+        primary: {strategy: 'xpath', selector: '//*[@content-desc="Manual target"]'},
+        proposedCandidates: candidates,
+        selectedElementId: 'selected-element',
+        adoptedElementId: 'previous-target',
+        findElements: vi.fn().mockResolvedValue(['new-target']),
+      }),
+    ).rejects.toMatchObject({code: 'PRIMARY_DIFFERENT_ELEMENT'});
+  });
+
   it('blocks primary execution failures and unresolved selected elements', async function () {
     await expect(
       verifyLocatorCandidates({

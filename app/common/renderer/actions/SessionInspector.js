@@ -197,7 +197,7 @@ export function unselectElement() {
   };
 }
 
-export function useElementInRecorder(strategy, selector, visibleCandidates) {
+export function useElementInRecorder(strategy, selector, visibleCandidates, options = {}) {
   return async (_dispatch, getState) => {
     const {driver, isEmbeddedMode, screenshot, sourceXML, selectedElement, selectedElementId} = getState().inspector;
     if (!isEmbeddedMode) {
@@ -229,6 +229,7 @@ export function useElementInRecorder(strategy, selector, visibleCandidates) {
         ? visibleCandidates
         : selectedElement.locatorCandidates || [],
       selectedElementId,
+      adoptedElementId: options.adoptedElementId,
       findElements: async (candidate) => {
         const result = await inspectorDriver.run({
           strategy: candidate.strategy,
@@ -256,11 +257,13 @@ export function useElementInRecorder(strategy, selector, visibleCandidates) {
       );
     }
 
+    const effectiveElementId = options.adoptedElementId || selectedElementId;
+    const adoptedManualElement = Boolean(options.adoptedElementId && options.adoptedElementId !== selectedElementId);
     const payload = {
       ...primary,
-      ...(selectedElementId ? {elementId: selectedElementId} : {}),
-      ...(selectedElement.tagName ? {tag: selectedElement.tagName} : {}),
-      attributes: selectedElement.attributes || {},
+      ...(effectiveElementId ? {elementId: effectiveElementId} : {}),
+      ...(!adoptedManualElement && selectedElement.tagName ? {tag: selectedElement.tagName} : {}),
+      attributes: adoptedManualElement ? {} : selectedElement.attributes || {},
       candidates,
       ...(screenshot ? {screenshot} : {}),
       ...(sourceXML ? {source: sourceXML} : {}),

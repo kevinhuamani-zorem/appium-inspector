@@ -100,6 +100,7 @@ export async function verifyLocatorCandidates({
   primary,
   proposedCandidates,
   selectedElementId,
+  adoptedElementId,
   findElements,
   onAlternativeError,
 }) {
@@ -132,10 +133,33 @@ export async function verifyLocatorCandidates({
       `El locator principal debe encontrar exactamente un elemento; encontró ${primaryMatches.length}. Ajusta el locator e inténtalo de nuevo.`,
     );
   }
-  if (primaryMatches[0] !== selectedElementId) {
+  const matchedElementId = primaryMatches[0];
+  let verificationElementId = selectedElementId;
+  if (matchedElementId !== selectedElementId) {
+    const isManualPrimary = primaryCandidate.stability === 'manual';
+    if (isManualPrimary && adoptedElementId === matchedElementId) {
+      verificationElementId = matchedElementId;
+    } else if (isManualPrimary && !adoptedElementId) {
+      const error = primaryVerificationError(
+        'MANUAL_ELEMENT_CONFIRMATION_REQUIRED',
+        'El locator manual encuentra exactamente otro elemento. Revisa el resultado antes de usarlo en el Recorder.',
+      );
+      error.selectedElementId = selectedElementId;
+      error.matchedElementId = matchedElementId;
+      error.strategy = primaryCandidate.strategy;
+      error.selector = primaryCandidate.selector;
+      throw error;
+    } else {
+      throw primaryVerificationError(
+        'PRIMARY_DIFFERENT_ELEMENT',
+        'El locator principal encuentra un elemento distinto al seleccionado. Ajusta el locator e inténtalo de nuevo.',
+      );
+    }
+  }
+  if (adoptedElementId && adoptedElementId !== matchedElementId) {
     throw primaryVerificationError(
       'PRIMARY_DIFFERENT_ELEMENT',
-      'El locator principal encuentra un elemento distinto al seleccionado. Ajusta el locator e inténtalo de nuevo.',
+      'El elemento encontrado cambió antes de confirmar. Ejecuta nuevamente el locator manual.',
     );
   }
 
@@ -143,7 +167,7 @@ export async function verifyLocatorCandidates({
   for (const candidate of alternatives) {
     try {
       const matches = await findElements(candidate);
-      if (Array.isArray(matches) && matches.length === 1 && matches[0] === selectedElementId) {
+      if (Array.isArray(matches) && matches.length === 1 && matches[0] === verificationElementId) {
         verified.push(verifiedCandidate(candidate));
       }
     } catch (error) {

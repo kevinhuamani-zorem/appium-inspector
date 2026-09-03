@@ -141,6 +141,40 @@ describe('explicit embedded element use', function () {
     expect(postMessage).not.toHaveBeenCalled();
   });
 
+  it('adopts and revalidates the unique element explicitly confirmed for a manual locator', async function () {
+    const state = createState({
+      selectedElement: {...selectedElement, locatorCandidates},
+      driver: {},
+    });
+    const run = vi.fn().mockResolvedValue({elements: [{id: 'parent-button'}]});
+    vi.spyOn(InspectorDriver, 'instance').mockReturnValue({run});
+    const manualSelector = '//*[@resource-id="manual-parent"]';
+
+    await expect(
+      useElementInRecorder('xpath', manualSelector, locatorCandidates)(vi.fn(), () => state),
+    ).rejects.toMatchObject({
+      code: 'MANUAL_ELEMENT_CONFIRMATION_REQUIRED',
+      matchedElementId: 'parent-button',
+    });
+    expect(postMessage).not.toHaveBeenCalled();
+
+    const payload = await useElementInRecorder(
+      'xpath',
+      manualSelector,
+      locatorCandidates,
+      {adoptedElementId: 'parent-button'},
+    )(vi.fn(), () => state);
+    expect(payload.elementId).toBe('parent-button');
+    expect(payload.attributes).toEqual({});
+    expect(payload.tag).toBeUndefined();
+    expect(payload.candidates[0]).toMatchObject({
+      selector: manualSelector,
+      stability: 'manual',
+      sameElement: true,
+    });
+    expect(postMessage).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     [createState({selectedElement: undefined}), 'id', 'login'],
     [createState(), '', 'login'],
@@ -205,6 +239,38 @@ describe('explicit embedded element use', function () {
     expect(setFeedback).toHaveBeenLastCalledWith({type: 'error', title: 'Host unavailable'});
     expect(state.inspector.selectedElement).toBe(selectedElement);
     expect(setIsSending).toHaveBeenLastCalledWith(false);
+  });
+
+  it('offers safe adoption when a manual locator resolves one different element', async function () {
+    const setFeedback = vi.fn();
+    const mismatch = Object.assign(new Error('different element'), {
+      code: 'MANUAL_ELEMENT_CONFIRMATION_REQUIRED',
+      matchedElementId: 'parent-button',
+    });
+    const options = {
+      isSendingRef: {current: false},
+      selectedElement,
+      strategy: 'xpath',
+      selector: '//*[@resource-id="manual-parent"]',
+      locatorCandidates,
+      setIsSending: vi.fn(),
+      setFeedback,
+    };
+
+    await confirmRecorderSelection({...options, send: vi.fn().mockRejectedValue(mismatch)});
+    expect(setFeedback).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: 'warning',
+      matchedElementId: 'parent-button',
+    }));
+
+    const send = vi.fn().mockResolvedValue({candidates: [{}]});
+    await confirmRecorderSelection({...options, send, adoptedElementId: 'parent-button'});
+    expect(send).toHaveBeenCalledWith(
+      'xpath',
+      '//*[@resource-id="manual-parent"]',
+      locatorCandidates,
+      {adoptedElementId: 'parent-button'},
+    );
   });
 
   it('processes only one rapid confirmation', async function () {

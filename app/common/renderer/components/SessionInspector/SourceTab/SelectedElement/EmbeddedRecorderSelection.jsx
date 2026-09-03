@@ -25,6 +25,7 @@ export const confirmRecorderSelection = async ({
   send,
   setIsSending,
   setFeedback,
+  adoptedElementId,
 }) => {
   if (!isValidRecorderSelection(selectedElement, strategy, selector)) {
     return false;
@@ -37,7 +38,9 @@ export const confirmRecorderSelection = async ({
   setIsSending(true);
   setFeedback({type: 'info', title: 'Verificando locators con la sesión activa de Appium…'});
   try {
-    const payload = await send(strategy, selector, locatorCandidates);
+    const payload = adoptedElementId
+      ? await send(strategy, selector, locatorCandidates, {adoptedElementId})
+      : await send(strategy, selector, locatorCandidates);
     const alternativeCount = Math.max(0, payload.candidates.length - 1);
     setFeedback({
       type: 'success',
@@ -45,7 +48,17 @@ export const confirmRecorderSelection = async ({
     });
     return true;
   } catch (error) {
-    setFeedback({type: 'error', title: error.message});
+    if (error.code === 'MANUAL_ELEMENT_CONFIRMATION_REQUIRED' && error.matchedElementId) {
+      setFeedback({
+        type: 'warning',
+        title: 'El locator manual encontró otro elemento',
+        description:
+          'Puede ser el botón o contenedor padre del elemento seleccionado. Confirma para adoptarlo y volver a verificarlo contra Appium.',
+        matchedElementId: error.matchedElementId,
+      });
+    } else {
+      setFeedback({type: 'error', title: error.message});
+    }
     return false;
   } finally {
     releaseSend();
@@ -123,7 +136,7 @@ const EmbeddedRecorderSelection = ({
     value,
   }));
 
-  const onUse = () =>
+  const onUse = (adoptedElementId) =>
     confirmRecorderSelection({
       isSendingRef,
       selectedElement,
@@ -133,6 +146,7 @@ const EmbeddedRecorderSelection = ({
       send: confirmElementInRecorder,
       setIsSending,
       setFeedback,
+      adoptedElementId,
     });
 
   return (
@@ -156,12 +170,35 @@ const EmbeddedRecorderSelection = ({
           type="primary"
           loading={isSending}
           disabled={isSending || !isValidRecorderSelection(selectedElement, strategy, selector)}
-          onClick={onUse}
+          onClick={() => onUse()}
         >
           Usar en Recorder
         </Button>
       </Space.Compact>
-      {feedback && <Alert showIcon type={feedback.type} title={feedback.title} />}
+      {feedback && (
+        <Alert
+          showIcon
+          type={feedback.type}
+          title={feedback.title}
+          description={feedback.description}
+          action={
+            feedback.matchedElementId ? (
+              <Space size="small">
+                <Button
+                  type="primary"
+                  loading={isSending}
+                  onClick={() => onUse(feedback.matchedElementId)}
+                >
+                  Usar elemento encontrado
+                </Button>
+                <Button disabled={isSending} onClick={() => setFeedback(null)}>
+                  Seguir editando
+                </Button>
+              </Space>
+            ) : undefined
+          }
+        />
+      )}
     </Space>
   );
 };
