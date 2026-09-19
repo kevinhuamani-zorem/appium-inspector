@@ -74,6 +74,7 @@ export function createElementAnalysisClient({
           typeof proposal.selector !== 'string' ||
           !proposal.selector.trim() ||
           typeof proposal.reason !== 'string' ||
+          (proposal.xpathStrategy !== undefined && typeof proposal.xpathStrategy !== 'string') ||
           ![true, false, null].includes(proposal.unique) ||
           typeof proposal.structural !== 'boolean' ||
           active.localCandidateIds.has(proposal.id) ||
@@ -89,6 +90,7 @@ export function createElementAnalysisClient({
           reason: proposal.reason,
           unique: proposal.unique,
           structural: proposal.structural,
+          ...(typeof proposal.xpathStrategy === 'string' ? {xpathStrategy: proposal.xpathStrategy} : {}),
         });
       }
       const acceptedIds = new Set([...candidates, ...proposals.map(({id}) => id)]);

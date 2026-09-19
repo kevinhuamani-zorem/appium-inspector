@@ -9,26 +9,24 @@
 .analysis {
   margin-top: 12px;
 }
-.panels {
-  display: grid;
-  grid-template-columns: minmax(250px, 0.85fr) minmax(0, 1.6fr);
-  gap: 18px;
-  margin: 16px 0;
-}
-.treePanel,
 .details {
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  margin: 16px 0;
 }
-.treePanel {
-  padding-right: 16px;
-  border-right: 1px solid var(--ant-color-border-secondary, #424242);
+.elementHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
 }
-.details {
-  max-height: 610px;
-  overflow: auto;
+.elementInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
 }
 .candidate {
   min-width: 0;
@@ -68,20 +66,19 @@
   justify-content: center;
   align-items: center;
 }
-@media (max-width: 850px) {
-  .panels {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .treePanel {
-    padding-right: 0;
-    border-right: 0;
-  }
+@media (max-width: 700px) {
   .toolbar,
   .analysis {
     flex-wrap: wrap;
   }
+  .elementHeader {
+    gap: 12px;
+  }
+  .attributes dl > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
 }
-
 .preview {
   flex-shrink: 0;
   align-self: flex-start;
@@ -92,7 +89,7 @@
 }
 .preview img {
   display: block;
-  max-height: 180px;
+  max-height: 140px;
   max-width: 100%;
   width: auto;
 }
@@ -104,4 +101,15 @@
 }
 .frameworkContract {
   margin-top: 8px;
+}
+
+.launcher {
+  display: inline-flex;
+  max-width: 100%;
+}
+.launchButton {
+  max-width: 100%;
+  height: auto;
+  min-height: 32px;
+  white-space: normal;
 }

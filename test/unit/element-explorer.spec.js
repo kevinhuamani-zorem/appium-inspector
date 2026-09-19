@@ -171,6 +171,85 @@ describe('element explorer catalog', () => {
     expect(getEmbeddedLocatorCandidatesForNode(document, node, true, driver)).toEqual(legacy);
   });
 
+  it('offers validated parent, child, sibling and label-chain relationships before positional fallback', () => {
+    const source =
+      '<hierarchy><Card><Label text="Carla"/><Button text="Pay"/></Card>' +
+      '<Card><Label text="Luis"/><Button text="Pay"/></Card></hierarchy>';
+    const catalog = buildElementCatalog(source, true, 'uiautomator2');
+    const document = sourceParsing.xmlToDOM(source);
+    const target = catalog.nodes.find((node) => node.nodeId === '0.1');
+    const labelChain = target.candidates.find((candidate) => candidate.xpathStrategy === 'Etiqueta → padre → hijo');
+    const sibling = target.candidates.find((candidate) => candidate.xpathStrategy === 'Hermano');
+    expect(labelChain).toMatchObject({unique: true, structural: false, stability: 'contextual'});
+    expect(sibling).toMatchObject({unique: true, structural: false});
+    expect(labelChain.reason).toContain('"Carla"');
+    expect(sibling.reason).toContain('hermano posterior');
+    expect(sibling.reason).not.toContain('adyacente');
+    const selected = xpathSelect(target.referenceSelector, document)[0];
+    for (const candidate of target.candidates.filter((entry) => entry.source === 'relationship')) {
+      expect(xpathSelect(candidate.selector, document)).toEqual([selected]);
+    }
+    expect(target.candidates.indexOf(labelChain)).toBeLessThan(
+      target.candidates.findIndex((entry) => entry.structural),
+    );
+    const parent = catalog.nodes.find((node) => node.nodeId === '0');
+    expect(parent.candidates.find((candidate) => candidate.xpathStrategy === 'Padre')).toMatchObject({unique: true});
+
+    const identified =
+      '<hierarchy><Card resource-id="com.app:id/recipient"><Button text="Pay"/></Card>' +
+      '<Card><Button text="Pay"/></Card></hierarchy>';
+    const child = buildElementCatalog(identified, true, 'uiautomator2').nodes.find((node) => node.nodeId === '0.0');
+    expect(child.candidates.find((candidate) => candidate.xpathStrategy === 'Hijo')).toMatchObject({
+      unique: true,
+      structural: false,
+    });
+  });
+
+  it('uses an identified ancestor without inventing sibling positions', () => {
+    const source =
+      '<hierarchy><Section resource-id="com.app:id/recipient"><Box><Button text="Pay"/></Box></Section>' +
+      '<Section><Box><Button text="Pay"/></Box></Section></hierarchy>';
+    const catalog = buildElementCatalog(source, true, 'uiautomator2');
+    const target = catalog.nodes.find((node) => node.nodeId === '0.0.0');
+    const candidate = target.candidates.find((entry) => entry.xpathStrategy === 'Ancestro');
+    expect(candidate).toMatchObject({unique: true, structural: false});
+    const document = sourceParsing.xmlToDOM(source);
+    expect(xpathSelect(candidate.selector, document)).toEqual(xpathSelect(target.referenceSelector, document));
+  });
+
+  it('rejects local relations that still point to several identical children', () => {
+    const source =
+      '<hierarchy><Card name="Recipient"><Label text="Carla"/><Button text="Pay"/><Button text="Pay"/></Card></hierarchy>';
+    const target = buildElementCatalog(source, true, 'uiautomator2').nodes.find((node) => node.nodeId === '0.1');
+    expect(target.candidates.filter((candidate) => candidate.source === 'relationship')).toEqual([]);
+    expect(target.candidates.find((candidate) => candidate.structural)).toMatchObject({
+      xpathStrategy: 'Posición (frágil)',
+      stability: 'structural',
+      unique: true,
+    });
+  });
+
+  it('escapes quoted label anchors and preserves iOS strategies', () => {
+    const source =
+      '<AppiumAUT><XCUIElementTypeOther><XCUIElementTypeStaticText label="A &quot;quote&quot; and &apos;apostrophe&apos;"/>' +
+      '<XCUIElementTypeButton label="Pay"/></XCUIElementTypeOther>' +
+      '<XCUIElementTypeOther><XCUIElementTypeButton label="Pay"/></XCUIElementTypeOther></AppiumAUT>';
+    const catalog = buildElementCatalog(source, true, 'xcuitest');
+    const target = catalog.nodes.find((node) => node.nodeId === '0.1');
+    const candidate = target.candidates.find((entry) => entry.xpathStrategy === 'Etiqueta → padre → hijo');
+    expect(candidate).toMatchObject({strategy: 'xpath', unique: true});
+    expect(candidate.selector).toContain('concat(');
+    const document = sourceParsing.xmlToDOM(source);
+    expect(xpathSelect(candidate.selector, document)).toEqual(xpathSelect(target.referenceSelector, document));
+  });
+
+  it('preserves direct unique identifiers without adding redundant relation candidates', () => {
+    const source = '<hierarchy><Card><Label text="Carla"/><Button resource-id="com.app:id/pay"/></Card></hierarchy>';
+    const target = buildElementCatalog(source, true, 'uiautomator2').nodes.find((node) => node.nodeId === '0.1');
+    expect(target.candidates.some((candidate) => candidate.strategy === 'id' && candidate.unique)).toBe(true);
+    expect(target.candidates.some((candidate) => candidate.source === 'relationship')).toBe(false);
+  });
+
   it('keeps candidate identities deterministic across snapshots of the same XML', () => {
     const first = buildElementCatalog(androidSource, true, 'uiautomator2');
     const second = buildElementCatalog(androidSource, true, 'uiautomator2');

@@ -1,6 +1,12 @@
+import {select as xpathSelect} from 'xpath';
+
 import {locatorCandidateId} from '../../embedded/candidate-verification.js';
 import {childNodesOf, xmlToDOM} from '../source-parsing.js';
-import {createEmbeddedLocatorContext, getEmbeddedLocatorCandidatesForNode} from './embedded-candidates.js';
+import {
+  createEmbeddedLocatorContext,
+  getEmbeddedLocatorCandidatesForNode,
+  toXPathLiteral,
+} from './embedded-candidates.js';
 
 const candidateStability = (candidate) => {
   if (candidate.structural) {
@@ -40,6 +46,194 @@ const interactiveOf = (tag, attributes) => {
   );
 };
 
+function xpathMetadata(selector) {
+  const expression = selector.replace(/"[^"]*"|'[^']*'/g, '');
+  const structural = /\[\s*\(*\s*[-+]?\d|\b(?:position|last)\s*\(/.test(expression);
+  if (structural) {
+    return {structural, xpathStrategy: 'Posición (frágil)'};
+  }
+  if (
+    /@(?:text|label|content-desc|name)\b/.test(expression) &&
+    /\/(?:parent::[^/]+|\.\.)\/(?:child::)?[^/.]/.test(expression)
+  ) {
+    return {structural, xpathStrategy: 'Etiqueta → padre → hijo'};
+  }
+  if (/\b(?:ancestor|ancestor-or-self)::/.test(expression)) {
+    return {structural, xpathStrategy: 'Ancestro'};
+  }
+  if (/\b(?:following-sibling|preceding-sibling)::/.test(expression)) {
+    return {structural, xpathStrategy: 'Hermano'};
+  }
+  if (/\bparent::|\/\.\.(?:\/|$|\[)/.test(expression)) {
+    return {structural, xpathStrategy: 'Padre'};
+  }
+  if (/\b(?:descendant|descendant-or-self)::|[^/]\/\//.test(expression)) {
+    return {structural, xpathStrategy: 'Descendiente'};
+  }
+  if (/\bchild::|[^/]\/(?![/@.])/.test(expression)) {
+    return {structural, xpathStrategy: 'Hijo'};
+  }
+  return {structural, xpathStrategy: /@/.test(expression) ? 'Atributos del elemento' : 'Tipo de elemento'};
+}
+
+const anchorAttributes = ['resource-id', 'id', 'content-desc', 'name', 'label', 'text'];
+
+/** Attribute anchors are indexed once; never enumerate every pair of XML nodes. */
+function relationCandidates(context) {
+  const anchors = new Map();
+  const childrenByParent = new Map();
+  for (const element of context.nodes) {
+    const children = childrenByParent.get(element.parentNode) || [];
+    children.push(element);
+    childrenByParent.set(element.parentNode, children);
+    const attribute = anchorAttributes.find((name) => {
+      const value = element.getAttribute(name);
+      return value && context.byAttribute.get(name)?.get(value)?.size === 1;
+    });
+    if (attribute) {
+      const predicate = '@' + attribute + '=' + toXPathLiteral(element.getAttribute(attribute));
+      anchors.set(element, {
+        attribute,
+        value: JSON.stringify(element.getAttribute(attribute)),
+        selector: '//*[' + predicate + ']',
+        predicate,
+      });
+    }
+  }
+  const neighbors = new Map();
+  for (const children of childrenByParent.values()) {
+    let previous;
+    for (const element of children) {
+      neighbors.set(element, {previous});
+      if (anchors.has(element)) {
+        previous = element;
+      }
+    }
+    let next;
+    for (let index = children.length - 1; index >= 0; index--) {
+      const element = children[index];
+      neighbors.get(element).next = next;
+      if (anchors.has(element)) {
+        next = element;
+      }
+    }
+  }
+  return (element) => {
+    const results = [];
+    const targetAttribute = [...anchorAttributes, 'class', 'type'].find((name) => element.getAttribute(name));
+    const test =
+      element.tagName +
+      (targetAttribute
+        ? '[@' + targetAttribute + '=' + toXPathLiteral(element.getAttribute(targetAttribute)) + ']'
+        : '');
+    const add = (selector, reason) => {
+      if (selector.length > 2048 || results.some((candidate) => candidate.selector === selector)) {
+        return false;
+      }
+      try {
+        const matches = xpathSelect(selector, context.document);
+        if (!Array.isArray(matches) || matches.length !== 1 || matches[0] !== element) {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+      const metadata = xpathMetadata(selector);
+      results.push({
+        id: locatorCandidateId('xpath', selector),
+        label: 'XPath · ' + metadata.xpathStrategy,
+        strategy: 'xpath',
+        selector,
+        reason,
+        unique: true,
+        uniqueness: 'unique',
+        priority: 35,
+        source: 'relationship',
+        stability: 'contextual',
+        ...metadata,
+      });
+      return true;
+    };
+    const parent = element.parentNode;
+    const parentAnchor = anchors.get(parent);
+    if (parentAnchor) {
+      add(
+        parentAnchor.selector + '/child::' + test,
+        'Identifica el padre por ' +
+          parentAnchor.attribute +
+          '=' +
+          parentAnchor.value +
+          ' y busca su hijo ' +
+          element.tagName +
+          '.',
+      );
+    }
+    for (const child of childrenByParent.get(element) || []) {
+      const anchor = anchors.get(child);
+      if (
+        anchor &&
+        add(
+          anchor.selector + '/parent::' + test,
+          'Identifica al hijo por ' +
+            anchor.attribute +
+            '=' +
+            anchor.value +
+            ' y obtiene su padre ' +
+            element.tagName +
+            '.',
+        )
+      ) {
+        break;
+      }
+    }
+    for (let ancestor = parent?.parentNode; ancestor?.nodeType === 1; ancestor = ancestor.parentNode) {
+      const anchor = anchors.get(ancestor);
+      if (
+        anchor &&
+        add(
+          '//' + test + '[ancestor::' + ancestor.tagName + '[' + anchor.predicate + ']]',
+          'Limita ' + element.tagName + ' al ancestro con ' + anchor.attribute + '=' + anchor.value + '.',
+        )
+      ) {
+        break;
+      }
+    }
+    const nearby = neighbors.get(element) || {};
+    for (const [sibling, axis] of [
+      [nearby.previous, 'following-sibling'],
+      [nearby.next, 'preceding-sibling'],
+    ]) {
+      const anchor = anchors.get(sibling);
+      if (!anchor) {
+        continue;
+      }
+      add(
+        anchor.selector + '/' + axis + '::' + test,
+        'Parte de ' +
+          anchor.attribute +
+          '=' +
+          anchor.value +
+          ' y busca un hermano ' +
+          (axis === 'following-sibling' ? 'posterior' : 'anterior') +
+          ' del mismo contenedor.',
+      );
+      if (['text', 'label', 'content-desc', 'name'].includes(anchor.attribute) && parent?.nodeType === 1) {
+        add(
+          anchor.selector + '/parent::' + parent.tagName + '/child::' + test,
+          'Usa la etiqueta ' +
+            anchor.value +
+            ' (' +
+            anchor.attribute +
+            '), sube al padre común y selecciona su hijo ' +
+            element.tagName +
+            '.',
+        );
+      }
+    }
+    return results;
+  };
+}
+
 /**
  * Build every node from one immutable source snapshot in sourceJSON preorder.
  * A nodeId is a source-tree path, never a WebDriver element ID. The empty path
@@ -54,7 +248,8 @@ export function buildElementCatalog(sourceXML, isNative, automationName) {
   if (!root) {
     return {nodes: [], roots: []};
   }
-  createEmbeddedLocatorContext(document);
+  const context = createEmbeddedLocatorContext(document);
+  const relational = relationCandidates(context);
   const nodes = [];
   const pending = [{element: root, path: '', parentId: null, referenceSelector: '/*[1]'}];
   while (pending.length) {
@@ -64,7 +259,23 @@ export function buildElementCatalog(sourceXML, isNative, automationName) {
     );
     const candidates = getEmbeddedLocatorCandidatesForNode(document, element, isNative, automationName, {
       referenceSelector,
-    }).map((candidate) => ({...candidate, stability: candidateStability(candidate)}));
+    }).map((candidate) => ({
+      ...candidate,
+      ...(candidate.strategy === 'xpath' ? xpathMetadata(candidate.selector) : {}),
+      stability: candidateStability(candidate),
+    }));
+    if (candidates.length && !candidates.some((candidate) => candidate.unique === true && !candidate.structural)) {
+      const selectors = new Set(
+        candidates.filter((candidate) => candidate.strategy === 'xpath').map(({selector}) => selector),
+      );
+      candidates.push(...relational(element).filter(({selector}) => !selectors.has(selector)));
+      candidates.sort(
+        (left, right) =>
+          Number(left.structural) - Number(right.structural) ||
+          Number(right.unique === true) - Number(left.unique === true) ||
+          left.priority - right.priority,
+      );
+    }
     nodes.push({
       nodeId: path,
       path,

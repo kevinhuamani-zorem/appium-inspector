@@ -6,6 +6,8 @@ import {downloadFile} from '../../../../utils/file-handling.js';
 import {copyToClipboard} from '../../../../utils/other.js';
 import ElementExplorer from '../ElementExplorer/ElementExplorer.jsx';
 
+import styles from './AppSource.module.css';
+
 const downloadXML = (sourceXML) => {
   const href = 'data:application/xml;charset=utf-8,' + encodeURIComponent(sourceXML);
   const filename = `app-source-${new Date().toJSON()}.xml`;
@@ -36,7 +38,7 @@ const AppSourceHeaderButtons = ({sourceXML, collapsible, collapsed, onToggleColl
   const {t} = useTranslation();
 
   return (
-    <span>
+    <Flex gap={4} wrap>
       {explorerProps?.isEmbeddedMode && <ElementExplorer {...explorerProps} />}
       <Tooltip title={t('Copy XML Source to Clipboard')}>
         <Button
@@ -63,7 +65,7 @@ const AppSourceHeaderButtons = ({sourceXML, collapsible, collapsed, onToggleColl
           />
         </Tooltip>
       )}
-    </span>
+    </Flex>
   );
 };
 
@@ -72,6 +74,7 @@ const AppSourceHeaderButtons = ({sourceXML, collapsible, collapsed, onToggleColl
  */
 const AppSourceCard = ({sourceXML, collapsible, collapsed, onToggleCollapse, children, explorerProps}) => (
   <Card
+    className={explorerProps?.isEmbeddedMode ? styles.embeddedSourceCard : undefined}
     title={<AppSourcePanelTitle />}
     extra={
       <AppSourceHeaderButtons

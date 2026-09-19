@@ -1,6 +1,6 @@
-import {IconBinaryTree, IconRefresh} from '@tabler/icons-react';
-import {Alert, Button, Empty, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip, Tree, Typography} from 'antd';
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {IconFocus2, IconRefresh} from '@tabler/icons-react';
+import {Alert, Button, Modal, Space, Spin, Table, Tag, Tooltip, Typography} from 'antd';
+import {useEffect, useRef, useState} from 'react';
 
 import {NATIVE_APP} from '../../../../constants/session-inspector.js';
 import {createElementAnalysisClient} from '../../../../embedded/element-explorer-client.js';
@@ -8,8 +8,8 @@ import {buildElementCatalog} from '../../../../utils/locator-generation/element-
 import {
   analysisNodes,
   elementCandidates,
-  explorerTree,
-  initialExplorerSelection,
+  explorerSelectionContext,
+  isExplorerSelectionCurrent,
   nodePreviewRect,
 } from './element-explorer-view.js';
 
@@ -17,207 +17,93 @@ import styles from './ElementExplorer.module.css';
 
 const {Text, Paragraph} = Typography;
 const idleAnalysis = {status: 'idle', phase: '', processed: 0, total: 0};
-const filters = [
-  {value: 'all', label: 'Todos los nodos'},
-  {value: 'visible', label: 'Visibles'},
-  {value: 'interactive', label: 'Interactivos'},
-  {value: 'ambiguous', label: 'Con locators ambiguos'},
-];
 
-export function ElementExplorerModal({
-  sourceXML,
-  sourceJSON,
-  sourceError,
-  screenshot,
-  windowSize,
-  currentContext,
-  automationName,
-  driver,
-  sessionCaps,
-  selectedElement,
-  methodCallInProgress,
-  verifyExplorerLocator,
-  applyClientMethod,
-  onClose,
-}) {
+export function ElementExplorerModal(props) {
+  const {screenshot, windowSize, methodCallInProgress, verifyExplorerLocator, onClose} = props;
+  const {current: capture} = useRef({
+    ...explorerSelectionContext(props),
+    screenshot,
+    windowSize,
+  });
   const [snapshot, setSnapshot] = useState(null);
   const [captureError, setCaptureError] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [invalidated, setInvalidated] = useState(false);
+  const [analysisAttempt, setAnalysisAttempt] = useState(0);
   const [analysis, setAnalysis] = useState(idleAnalysis);
-  const [recommendations, setRecommendations] = useState({});
+  const [recommendation, setRecommendation] = useState(null);
   const [locatorContracts, setLocatorContracts] = useState({});
-  const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState('all');
-  const [expandedKeys, setExpandedKeys] = useState([]);
-  const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [candidateId, setCandidateId] = useState(null);
   const [verification, setVerification] = useState(null);
   const [sending, setSending] = useState(false);
   const clientRef = useRef(null);
-  const analysisOperationRef = useRef(0);
-  const initialPathRef = useRef(selectedElement?.path);
   const operationRef = useRef(0);
-  const snapshotRef = useRef(null);
+  const invalidatedRef = useRef(false);
   const currentRef = useRef(null);
-  const platform = String(sessionCaps?.platformName || driver?.capabilities?.platformName || '').toLowerCase();
-  const sessionId = driver?.sessionId || '';
-  const native = currentContext === NATIVE_APP;
-  currentRef.current = {sourceXML, sourceJSON, currentContext, sessionId, refreshing, selectedNodeId};
-  snapshotRef.current = snapshot;
+  currentRef.current = explorerSelectionContext(props);
+  const changed = invalidated || !isExplorerSelectionCurrent(capture, currentRef.current);
+  const stale = !snapshot || changed;
+  if (changed) {
+    invalidatedRef.current = true;
+  }
+  useEffect(() => {
+    if (changed) {
+      setInvalidated(true);
+    }
+  }, [changed]);
 
   useEffect(() => {
-    operationRef.current++;
-    analysisOperationRef.current++;
-    clientRef.current?.dispose();
-    clientRef.current = null;
-    setSnapshot(null);
-    setCaptureError('');
-    setSelectedNodeId(null);
-    setCandidateId(null);
-    setVerification(null);
-    setSending(false);
-    setRecommendations({});
-    setLocatorContracts({});
-    setAnalysis(idleAnalysis);
-    if (refreshing) {
-      return;
-    }
-    if (!native || !['android', 'ios'].includes(platform)) {
-      setCaptureError('El explorador admite contexto nativo Android e iOS. Cambia a NATIVE_APP para analizarlo.');
-      return;
-    }
-    if (sourceError) {
-      setCaptureError('No se pudo obtener el XML de esta pantalla. Actualiza la captura para continuar.');
-      return;
-    }
-    if (!sourceXML || !sessionId) {
-      setCaptureError('No hay una captura de la sesión disponible. Actualiza la pantalla e inténtalo de nuevo.');
-      return;
-    }
     const timer = setTimeout(() => {
       try {
-        const catalog = buildElementCatalog(sourceXML, true, automationName);
-        if (!catalog.nodes.length) {
-          throw new Error('El XML no contiene nodos para explorar.');
+        if (capture.context !== NATIVE_APP || !['android', 'ios'].includes(capture.platform)) {
+          throw new Error('Selecciona un elemento en el contexto nativo Android o iOS del Inspector.');
+        }
+        if (capture.sourceError || !capture.sourceXml || !capture.sessionId) {
+          throw new Error(
+            'No hay una captura válida. Actualiza la pantalla en el Inspector y vuelve a abrir el elemento.',
+          );
+        }
+        const catalog = buildElementCatalog(capture.sourceXml, true, capture.automationName);
+        const node = catalog.nodes.find((entry) => entry.nodeId === capture.targetNodeId);
+        if (typeof capture.targetNodeId !== 'string' || !node) {
+          throw new Error('Selecciona un elemento en el árbol XML del Inspector y vuelve a abrir el explorador.');
         }
         setSnapshot({
+          ...capture,
           snapshotId: crypto.randomUUID(),
-          sourceXml: sourceXML,
-          sourceJSON,
-          screenshot,
-          windowSize,
-          context: currentContext,
-          sessionId,
-          platform,
           catalog,
+          node,
           capturedAt: new Date().toLocaleTimeString(),
         });
-        const selection = initialExplorerSelection(catalog, initialPathRef.current);
-        initialPathRef.current = undefined;
-        setSelectedNodeId(selection.nodeId);
-        setCandidateId(selection.candidateId);
-        setExpandedKeys(selection.expandedKeys);
       } catch (error) {
         setCaptureError(error.message);
       }
     }, 0);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [
-    sourceXML,
-    sourceJSON,
-    sourceError,
-    screenshot,
-    windowSize,
-    currentContext,
-    automationName,
-    sessionId,
-    platform,
-    native,
-    refreshVersion,
-    refreshing,
-  ]);
+    return () => clearTimeout(timer);
+  }, [capture]);
 
-  useEffect(
-    () => () => {
-      operationRef.current++;
-      analysisOperationRef.current++;
-      snapshotRef.current = null;
-      clientRef.current?.dispose();
-    },
-    [],
-  );
-
-  const tree = useMemo(() => explorerTree(snapshot?.catalog, query, filter), [snapshot, query, filter]);
-  const node = snapshot?.catalog.nodes.find((entry) => entry.nodeId === selectedNodeId);
-  const recommendation = node ? recommendations[node.nodeId] : undefined;
-  const candidates = elementCandidates(node, recommendation?.proposals);
-  const candidate = candidates.find((entry) => entry.id === candidateId);
-  const candidateContract =
-    node && candidate ? locatorContracts[JSON.stringify([node.nodeId, candidate.id])] : undefined;
-  const previewRect = snapshot ? nodePreviewRect(node, snapshot.windowSize) : null;
-  const stale =
-    !snapshot ||
-    snapshot.sourceXml !== sourceXML ||
-    snapshot.sourceJSON !== sourceJSON ||
-    snapshot.context !== currentContext ||
-    snapshot.sessionId !== sessionId ||
-    refreshing;
-  const analysisRunning = analysis.status === 'running';
-
-  const handleSelectNode = (keys) => {
-    operationRef.current++;
-    analysisOperationRef.current++;
-    clientRef.current?.dispose();
-    clientRef.current = null;
-    setRecommendations({});
-    setLocatorContracts({});
-    setAnalysis(idleAnalysis);
-    const next = snapshot?.catalog.nodes.find((entry) => entry.nodeId === keys[0]);
-    setSelectedNodeId(next?.nodeId ?? null);
-    setCandidateId(next?.candidates[0]?.id ?? null);
-    setVerification(null);
-    setSending(false);
-  };
-
-  const handleSelectCandidate = (nextId) => {
-    operationRef.current++;
-    setCandidateId(nextId);
-    setVerification(null);
-    setSending(false);
-  };
-
-  const handleCancelAnalysis = () => {
-    analysisOperationRef.current++;
-    clientRef.current?.dispose();
-    clientRef.current = null;
-    setAnalysis((previous) => ({...previous, status: 'cancelled', phase: 'Análisis cancelado'}));
-  };
-  const handleAnalyzeElement = () => {
-    if (stale || !node || sending || methodCallInProgress) {
+  // Opening the modal is the explicit request to analyze its fixed Inspector selection.
+  useEffect(() => {
+    if (!snapshot) {
       return;
     }
-    clientRef.current?.dispose();
-    const operation = ++analysisOperationRef.current;
     operationRef.current++;
-    setRecommendations({});
-    setCandidateId(node.candidates[0]?.id ?? null);
     setVerification(null);
     setSending(false);
-    setAnalysis({status: 'running', phase: 'Analizando el elemento seleccionado', processed: 0, total: 1});
+    setRecommendation(null);
+    setLocatorContracts({});
+    setCandidateId(snapshot.node.candidates.find((entry) => entry.unique === true)?.id ?? null);
+    if (changed) {
+      setAnalysis({...idleAnalysis, status: 'cancelled', phase: 'La selección o la captura cambió.'});
+      return;
+    }
+    const operationCounter = operationRef;
+    let disposed = false;
     const isCurrent = () =>
-      analysisOperationRef.current === operation &&
-      snapshotRef.current === snapshot &&
-      currentRef.current.selectedNodeId === node.nodeId &&
-      currentRef.current.sourceXML === snapshot.sourceXml &&
-      currentRef.current.sourceJSON === snapshot.sourceJSON &&
-      currentRef.current.currentContext === snapshot.context &&
-      currentRef.current.sessionId === snapshot.sessionId &&
-      !currentRef.current.refreshing;
+      !disposed && !invalidatedRef.current && isExplorerSelectionCurrent(capture, currentRef.current);
+    setAnalysis({status: 'running', phase: 'Analizando el elemento seleccionado', processed: 0, total: 1});
+    let client;
     try {
-      const client = createElementAnalysisClient({
+      client = createElementAnalysisClient({
         onUpdate(update) {
           if (!isCurrent()) {
             return;
@@ -226,26 +112,22 @@ export function ElementExplorerModal({
           if (update.locatorContracts) {
             setLocatorContracts((previous) => ({
               ...previous,
-              ...Object.fromEntries(
-                update.locatorContracts.map((entry) => [JSON.stringify([entry.nodeId, entry.candidateId]), entry]),
-              ),
+              ...Object.fromEntries(update.locatorContracts.map((entry) => [entry.candidateId, entry])),
             }));
           }
-          if (update.results?.length) {
+          const result = update.results?.find((entry) => entry.nodeId === snapshot.targetNodeId);
+          if (result) {
             operationRef.current++;
             setVerification(null);
             setSending(false);
-            setRecommendations((previous) => ({
-              ...previous,
-              ...Object.fromEntries(update.results.map((result) => [result.nodeId, result])),
-            }));
+            setRecommendation(result);
           }
         },
       });
       clientRef.current = client;
       client.start({
         snapshotId: snapshot.snapshotId,
-        targetNodeId: node.nodeId,
+        targetNodeId: snapshot.targetNodeId,
         sessionId: snapshot.sessionId,
         platform: snapshot.platform,
         context: snapshot.context,
@@ -261,36 +143,46 @@ export function ElementExplorerModal({
         total: 1,
       });
     }
-  };
-  const handleRefresh = async () => {
+    return () => {
+      disposed = true;
+      operationCounter.current++;
+      client?.dispose();
+      if (clientRef.current === client) {
+        clientRef.current = null;
+      }
+    };
+  }, [snapshot, capture, changed, analysisAttempt]);
+
+  const node = snapshot?.node;
+  const allCandidates = elementCandidates(node, recommendation?.proposals);
+  const candidates = allCandidates.filter((entry) => entry.unique === true);
+  const candidate = candidates.find((entry) => entry.id === candidateId);
+  const candidateContract = candidate ? locatorContracts[candidate.id] : undefined;
+  const previewRect = nodePreviewRect(node, snapshot?.windowSize);
+  const analysisRunning = analysis.status === 'running';
+
+  const handleSelectCandidate = (nextId) => {
     operationRef.current++;
-    analysisOperationRef.current++;
+    setCandidateId(nextId);
+    setVerification(null);
+    setSending(false);
+  };
+  const handleCancelAnalysis = () => {
     clientRef.current?.dispose();
     clientRef.current = null;
-    setRefreshing(true);
-    setVerification(null);
-    try {
-      await applyClientMethod({methodName: 'getPageSource'});
-      setRefreshVersion((value) => value + 1);
-    } catch (error) {
-      setCaptureError(error.message);
-    } finally {
-      setRefreshing(false);
-    }
+    setAnalysis((previous) => ({...previous, status: 'cancelled', phase: 'Análisis cancelado'}));
   };
   const handleClose = () => {
     operationRef.current++;
-    analysisOperationRef.current++;
     clientRef.current?.dispose();
     clientRef.current = null;
     onClose();
   };
-
   const handleVerify = async (transfer) => {
     if (
       stale ||
       !node ||
-      !candidate ||
+      candidate?.unique !== true ||
       sending ||
       methodCallInProgress ||
       (transfer && candidateContract?.compatible === false)
@@ -298,16 +190,12 @@ export function ElementExplorerModal({
       return;
     }
     const operation = ++operationRef.current;
-    setSending(true);
-    setVerification({type: 'info', message: 'Verificando identidad y coincidencia única contra Appium…'});
     const isCurrent = () =>
       operationRef.current === operation &&
-      snapshotRef.current === snapshot &&
-      currentRef.current.sourceXML === snapshot.sourceXml &&
-      currentRef.current.sourceJSON === snapshot.sourceJSON &&
-      currentRef.current.currentContext === snapshot.context &&
-      currentRef.current.sessionId === snapshot.sessionId &&
-      !currentRef.current.refreshing;
+      !invalidatedRef.current &&
+      isExplorerSelectionCurrent(capture, currentRef.current);
+    setSending(true);
+    setVerification({type: 'info', message: 'Verificando identidad y coincidencia única contra Appium…'});
     try {
       await verifyExplorerLocator(node, candidate, snapshot, {isCurrent, transfer});
       if (!isCurrent()) {
@@ -315,7 +203,6 @@ export function ElementExplorerModal({
       }
       setVerification({
         type: 'success',
-        nodeId: node.nodeId,
         candidateId: candidate.id,
         message: transfer
           ? 'Selector enviado para revalidación en el Recorder.'
@@ -334,16 +221,18 @@ export function ElementExplorerModal({
       }
     }
   };
-
   const columns = [
     {
-      title: 'Estrategia y valor',
+      title: 'Estrategia, locator y motivo',
       key: 'selector',
       render: (_, entry) => {
-        const contract = node ? locatorContracts[JSON.stringify([node.nodeId, entry.id])] : undefined;
+        const contract = locatorContracts[entry.id];
         return (
           <div className={styles.candidate}>
-            <Text strong>{entry.strategy}</Text>
+            <Space wrap>
+              <Text strong>{entry.strategy}</Text>
+              {entry.xpathStrategy && <Tag>{entry.xpathStrategy}</Tag>}
+            </Space>
             <Paragraph className={styles.selector} copyable={{text: entry.selector}}>
               {entry.selector}
             </Paragraph>
@@ -372,12 +261,8 @@ export function ElementExplorerModal({
       width: 170,
       render: (_, entry) => (
         <Space orientation="vertical" size={4}>
-          <Tag color={entry.unique === true ? 'cyan' : entry.unique === false ? 'orange' : 'default'}>
-            {entry.unique === true ? 'Único en XML' : entry.unique === false ? 'Ambiguo en XML' : 'Unicidad pendiente'}
-          </Tag>
-          {verification?.type === 'success' &&
-          verification.nodeId === node?.nodeId &&
-          verification.candidateId === entry.id ? (
+          <Tag color="cyan">Único en XML</Tag>
+          {verification?.type === 'success' && verification.candidateId === entry.id ? (
             <Tag color="green">Verificado en Appium</Tag>
           ) : (
             <Tag>Pendiente de Appium</Tag>
@@ -393,10 +278,9 @@ export function ElementExplorerModal({
   return (
     <Modal
       open
-      title="Explorar elementos de la pantalla"
-      width="min(1320px, 96vw)"
+      title="Explorar elemento seleccionado"
+      width="min(1100px, 96vw)"
       onCancel={handleClose}
-      className={styles.modal}
       footer={
         <Space wrap>
           <Button onClick={handleClose}>Cerrar</Button>
@@ -415,36 +299,31 @@ export function ElementExplorerModal({
       }
     >
       <div className={styles.toolbar}>
-        <div>
-          <Text strong>
-            {platform.toUpperCase()} · {currentContext}
-          </Text>
-          <div>
-            <Text type="secondary">
-              {snapshot
-                ? snapshot.catalog.nodes.length + ' nodos · captura ' + snapshot.capturedAt
-                : 'Preparando captura…'}
-            </Text>
-          </div>
-        </div>
-        <Button icon={<IconRefresh size={16} />} loading={refreshing} onClick={handleRefresh}>
-          Actualizar pantalla
-        </Button>
+        <Text strong>
+          {capture.platform.toUpperCase()} · {capture.context}
+        </Text>
+        {snapshot && <Text type="secondary">Captura {snapshot.capturedAt}</Text>}
       </div>
+      {changed && (
+        <Alert
+          type="warning"
+          showIcon
+          title="La selección o la captura del Inspector cambió"
+          description="Cierra este panel y vuelve a explorar el elemento seleccionado. Los resultados anteriores ya no se pueden usar."
+        />
+      )}
       {captureError && <Alert type="warning" showIcon title={captureError} />}
       {!snapshot && !captureError && (
         <div className={styles.loading}>
-          <Spin /> Preparando árbol y locators…
+          <Spin /> Preparando los locators del elemento…
         </div>
       )}
-      {snapshot && (
+      {node && (
         <>
           <div className={styles.analysis} role="status" aria-live="polite">
             <Space wrap>
-              {analysisRunning && <Spin size="small" />}
-              <Text>
-                {analysis.phase || 'Selecciona un elemento del árbol y solicita su análisis cuando lo necesites.'}
-              </Text>
+              {analysisRunning && !changed && <Spin size="small" />}
+              <Text>{analysis.phase || 'Locators locales disponibles'}</Text>
               {analysis.total > 0 && (
                 <Text type="secondary">
                   {analysis.processed} / {analysis.total} elemento
@@ -452,18 +331,18 @@ export function ElementExplorerModal({
               )}
               {analysis.model && <Text type="secondary">{analysis.model}</Text>}
             </Space>
-            {analysisRunning ? (
+            {analysisRunning && !changed ? (
               <Button size="small" onClick={handleCancelAnalysis}>
                 Cancelar análisis
               </Button>
             ) : (
-              <Tooltip title="El agente analiza únicamente el nodo seleccionado y usa el XML completo como contexto. Puedes elegir textos, campos, botones o cualquier otro nodo.">
+              <Tooltip title="Analiza nuevamente este mismo elemento usando el XML de la captura como contexto.">
                 <Button
-                  type="primary"
-                  disabled={stale || !node || sending || methodCallInProgress}
-                  onClick={handleAnalyzeElement}
+                  icon={<IconRefresh size={16} />}
+                  disabled={stale || sending || methodCallInProgress}
+                  onClick={() => setAnalysisAttempt((value) => value + 1)}
                 >
-                  Analizar este elemento
+                  Volver a analizar
                 </Button>
               </Tooltip>
             )}
@@ -472,109 +351,88 @@ export function ElementExplorerModal({
             <Alert
               type="warning"
               showIcon
-              title="El árbol y los locators siguen disponibles"
+              title="Los locators locales siguen disponibles"
               description={
-                analysis.error || 'El agente no pudo completar el análisis. Puedes continuar con la evidencia local.'
+                analysis.error ||
+                'El agente no pudo completar el análisis. Puedes continuar con los locators únicos del XML.'
               }
             />
           )}
-          <div className={styles.panels}>
-            <section className={styles.treePanel} aria-label="Árbol completo de elementos">
-              <Input.Search
-                aria-label="Buscar elemento por texto, identificador o tipo"
-                placeholder="Buscar texto, identificador o tipo"
-                allowClear
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-              <Select aria-label="Filtrar elementos" options={filters} value={filter} onChange={setFilter} />
-              <Text type="secondary">{tree.matchingCount} coincidencias · se conservan los nodos padre</Text>
-              <Tree
-                virtual
-                height={440}
-                treeData={tree.treeData}
-                selectedKeys={selectedNodeId === null ? [] : [selectedNodeId]}
-                expandedKeys={query || filter !== 'all' ? tree.includedKeys : expandedKeys}
-                onExpand={setExpandedKeys}
-                onSelect={handleSelectNode}
-                showLine
-                blockNode
-              />
-            </section>
-            <section className={styles.details} aria-label="Detalle del elemento">
-              {!node ? (
-                <Empty description="Selecciona un nodo para revisar sus identificadores y locators" />
-              ) : (
-                <>
-                  <div>
-                    <Text strong>{node.label || node.tag}</Text> <Tag>{node.tag}</Tag>
-                  </div>
-                  {snapshot.screenshot && (
-                    <div className={styles.preview}>
-                      <img
-                        src={'data:image/png;base64,' + snapshot.screenshot}
-                        alt="Captura de la pantalla analizada"
-                      />
-                      {previewRect && <span className={styles.previewRect} style={previewRect} />}
-                    </div>
-                  )}
-                  {recommendation && (
-                    <Alert
-                      type="info"
-                      showIcon
-                      title={'Nombre sugerido: ' + recommendation.suggestedName}
-                      description={recommendation.reason}
-                    />
-                  )}
-                  {recommendation?.warnings?.length > 0 && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      title="Observaciones del análisis"
-                      description={
-                        <ul>
-                          {[...new Set(recommendation.warnings)].map((warning) => (
-                            <li key={warning}>{warning}</li>
-                          ))}
-                        </ul>
-                      }
-                    />
-                  )}
-                  <Text type="secondary">
-                    Las propuestas se comprueban con el XML. Verifica el selector en Appium antes de usarlo; «Usar en
-                    Recorder» también verifica su identidad.
-                  </Text>
-                  <details className={styles.attributes}>
-                    <summary>Atributos del XML ({Object.keys(node.attributes).length})</summary>
-                    <dl>
-                      {Object.entries(node.attributes).map(([name, value]) => (
-                        <div key={name}>
-                          <dt>{name}</dt>
-                          <dd>{value || '—'}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </details>
-                  <Table
-                    size="small"
-                    rowKey="id"
-                    pagination={false}
-                    dataSource={candidates}
-                    columns={columns}
-                    scroll={{y: 350}}
-                    locale={{emptyText: 'No hay locators compatibles para este nodo'}}
-                    rowSelection={{
-                      type: 'radio',
-                      selectedRowKeys: candidateId === null ? [] : [candidateId],
-                      onChange: (keys) => handleSelectCandidate(keys[0]),
-                    }}
-                    onRow={(entry) => ({onClick: () => handleSelectCandidate(entry.id)})}
-                  />
-                </>
+          <section className={styles.details} aria-label="Detalle del elemento">
+            <div className={styles.elementHeader}>
+              {snapshot.screenshot && (
+                <div className={styles.preview}>
+                  <img src={'data:image/png;base64,' + snapshot.screenshot} alt="Captura del elemento seleccionado" />
+                  {previewRect && <span className={styles.previewRect} style={previewRect} />}
+                </div>
               )}
-            </section>
-          </div>
-          {verification && <Alert showIcon type={verification.type} title={verification.message} />}
+              <div className={styles.elementInfo}>
+                <Space wrap>
+                  <Text strong>{node.label || node.tag}</Text>
+                  <Tag>{node.tag}</Tag>
+                </Space>
+                <Text type="secondary">
+                  Elemento elegido en el árbol XML del Inspector. Para explorar otro, cierra este panel y selecciónalo
+                  allí.
+                </Text>
+                <details className={styles.attributes}>
+                  <summary>Atributos del XML ({Object.keys(node.attributes).length})</summary>
+                  <dl>
+                    {Object.entries(node.attributes).map(([name, value]) => (
+                      <div key={name}>
+                        <dt>{name}</dt>
+                        <dd>{value || '—'}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </details>
+              </div>
+            </div>
+            {recommendation && (
+              <Alert
+                type="info"
+                showIcon
+                title={'Nombre sugerido: ' + recommendation.suggestedName}
+                description={recommendation.reason}
+              />
+            )}
+            {recommendation?.warnings?.length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                title="Observaciones del análisis"
+                description={
+                  <ul>
+                    {[...new Set(recommendation.warnings)].map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                }
+              />
+            )}
+            <Text type="secondary">
+              {candidates.length} locators únicos en esta captura. «Usar en Recorder» verifica además la coincidencia y
+              la identidad en Appium.
+              {allCandidates.length > candidates.length &&
+                ' Se omitieron los candidatos ambiguos o cuya unicidad no está comprobada.'}
+            </Text>
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={false}
+              dataSource={candidates}
+              columns={columns}
+              scroll={{y: 350}}
+              locale={{emptyText: 'No hay locators únicos comprobados en el XML para este elemento.'}}
+              rowSelection={{
+                type: 'radio',
+                selectedRowKeys: candidateId === null ? [] : [candidateId],
+                onChange: (keys) => handleSelectCandidate(keys[0]),
+              }}
+              onRow={(entry) => ({onClick: () => handleSelectCandidate(entry.id)})}
+            />
+          </section>
+          {verification && !changed && <Alert showIcon type={verification.type} title={verification.message} />}
         </>
       )}
     </Modal>
@@ -583,14 +441,29 @@ export function ElementExplorerModal({
 
 export default function ElementExplorer(props) {
   const [open, setOpen] = useState(false);
-  const handleOpen = () => setOpen(true);
-  const handleClose = () => setOpen(false);
+  const selected = typeof props.selectedElement?.path === 'string';
+  const disabled = !selected || !props.sourceXML || Boolean(props.sourceError);
+  const reason = !selected
+    ? 'Selecciona primero un elemento en el árbol XML del Inspector.'
+    : !props.sourceXML || props.sourceError
+      ? 'Actualiza la captura del Inspector antes de explorar el elemento.'
+      : 'Obtén locators únicos y propuestas para el elemento seleccionado.';
   return (
     <>
-      <Button id="btnExploreElements" icon={<IconBinaryTree size={16} />} onClick={handleOpen}>
-        Explorar elementos
-      </Button>
-      {open && <ElementExplorerModal {...props} onClose={handleClose} />}
+      <Tooltip title={reason}>
+        <span className={styles.launcher}>
+          <Button
+            id="btnExploreElements"
+            className={styles.launchButton}
+            icon={<IconFocus2 size={16} />}
+            disabled={disabled}
+            onClick={() => setOpen(true)}
+          >
+            Explorar elemento seleccionado
+          </Button>
+        </span>
+      </Tooltip>
+      {open && <ElementExplorerModal {...props} onClose={() => setOpen(false)} />}
     </>
   );
 }

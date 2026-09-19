@@ -3,8 +3,8 @@ import {describe, expect, it, vi} from 'vitest';
 import {
   analysisNodes,
   elementCandidates,
-  initialExplorerSelection,
-  explorerTree,
+  explorerSelectionContext,
+  isExplorerSelectionCurrent,
   nodePreviewRect,
 } from '../../app/common/renderer/components/SessionInspector/SourceTab/ElementExplorer/element-explorer-view.js';
 import {
@@ -145,6 +145,7 @@ describe('element explorer analysis lifecycle', () => {
       strategy: 'xpath',
       selector: '//*[@text="Pagar"]',
       reason: 'Texto observado',
+      xpathStrategy: 'Atributos del elemento',
       unique: true,
       structural: false,
     };
@@ -228,44 +229,6 @@ describe('element explorer analysis lifecycle', () => {
   });
 });
 
-describe('complete source tree filtering', () => {
-  const catalog = {
-    nodes: [
-      {...snapshot.nodes[0], label: 'hierarchy', visible: null, interactive: false},
-      {...snapshot.nodes[1], label: 'Pagar', visible: true, interactive: true},
-      {
-        nodeId: '1',
-        parentId: '',
-        tag: 'View',
-        attributes: {text: 'Oculto'},
-        label: 'Oculto',
-        candidates: [],
-        visible: false,
-        interactive: false,
-      },
-    ],
-  };
-
-  it('preserves every node without filters and keeps ancestors when searching a leaf', () => {
-    const all = explorerTree(catalog);
-    expect(all.matchingCount).toBe(3);
-    expect(all.treeData[0].key).toBe('');
-    expect(all.treeData[0].children.map(({key}) => key)).toEqual(['0', '1']);
-    const filtered = explorerTree(catalog, 'Pagar');
-    expect(filtered.matchingCount).toBe(1);
-    expect(filtered.treeData[0].key).toBe('');
-    expect(filtered.treeData[0].children.map(({key}) => key)).toEqual(['0']);
-  });
-
-  it('filters explicitly and produces a compact analysis payload without changing XML attributes', () => {
-    const filtered = explorerTree(catalog, '', 'visible');
-    expect(filtered.matchingCount).toBe(1);
-    expect(analysisNodes(catalog).map(({nodeId}) => nodeId)).toEqual(['', '0', '1']);
-    expect(analysisNodes(catalog)[1].attributes).toEqual({text: 'Pagar'});
-    expect(analysisNodes(catalog)[1]).not.toHaveProperty('visible');
-  });
-});
-
 describe('screenshot node highlight', () => {
   it('maps Android bounds and iOS coordinates to the captured viewport', () => {
     expect(nodePreviewRect({attributes: {bounds: '[10,20][40,60]'}}, {width: 100, height: 100})).toEqual({
@@ -282,12 +245,43 @@ describe('screenshot node highlight', () => {
 });
 
 describe('selected element candidates and initial Inspector selection', () => {
-  it('preselects any Inspector path and expands its ancestors, including the empty root path', () => {
-    const catalog = {...snapshot, roots: ['']};
-    expect(initialExplorerSelection(catalog, '0')).toEqual({nodeId: '0', candidateId: 'id-pay', expandedKeys: ['']});
-    expect(initialExplorerSelection(catalog, '')).toEqual({nodeId: '', candidateId: null, expandedKeys: ['']});
-    expect(initialExplorerSelection(catalog, undefined).nodeId).toBeNull();
-    expect(initialExplorerSelection(catalog, 'stale').nodeId).toBeNull();
+  it('captures the exact Inspector selection including the empty XML root', () => {
+    const props = {
+      selectedElement: {path: ''},
+      sourceXML: '<hierarchy/>',
+      sourceJSON: {},
+      currentContext: 'NATIVE_APP',
+      driver: {sessionId: 'one'},
+      sessionCaps: {platformName: 'Android'},
+    };
+    const capture = explorerSelectionContext(props);
+    expect(capture.targetNodeId).toBe('');
+    expect(capture.platform).toBe('android');
+    expect(isExplorerSelectionCurrent(capture, explorerSelectionContext(props))).toBe(true);
+    for (const changed of [
+      {...props, selectedElement: {path: '0'}},
+      {...props, selectedElement: undefined},
+      {...props, sourceXML: '<hierarchy><View/></hierarchy>'},
+      {...props, sourceJSON: {}},
+      {...props, sourceError: true},
+      {...props, driver: {sessionId: 'two'}},
+      {...props, currentContext: 'WEBVIEW'},
+      {...props, sessionCaps: {platformName: 'iOS'}},
+      {...props, automationName: 'xcuitest'},
+    ]) {
+      expect(isExplorerSelectionCurrent(capture, explorerSelectionContext(changed))).toBe(false);
+    }
+  });
+
+  it('retains all XML context and strategy labels in the analysis request', () => {
+    const catalog = {
+      nodes: snapshot.nodes.map((node) => ({
+        ...node,
+        candidates: node.candidates.map((candidate) => ({...candidate, xpathStrategy: 'Padre'})),
+      })),
+    };
+    expect(analysisNodes(catalog).map(({nodeId}) => nodeId)).toEqual(['', '0']);
+    expect(analysisNodes(catalog)[1].candidates[0].xpathStrategy).toBe('Padre');
   });
 
   it('merges new proposals without replacing or duplicating local selector pairs', () => {
@@ -325,5 +319,16 @@ describe('selected element candidates and initial Inspector selection', () => {
     expect(result[1]).not.toHaveProperty('sameElement');
     expect(result[1]).not.toHaveProperty('matchCount');
     expect(elementCandidates(snapshot.nodes[1])).toHaveLength(1);
+  });
+});
+
+describe('locator fallback ordering', () => {
+  it('keeps structural candidates after context proposals without changing their contents', () => {
+    const fallback = {id: 'position', strategy: 'xpath', selector: '/hierarchy/View[1]', structural: true};
+    const local = {id: 'id', strategy: 'id', selector: 'pay', structural: false};
+    const proposal = {id: 'context', strategy: 'xpath', selector: '//View[@text="Pagar"]', structural: false};
+    const result = elementCandidates({candidates: [local, fallback]}, [proposal]);
+    expect(result.map(({id}) => id)).toEqual(['id', 'context', 'position']);
+    expect(result[2]).toMatchObject(fallback);
   });
 });
