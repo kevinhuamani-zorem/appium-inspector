@@ -2,6 +2,8 @@ import {describe, expect, it, vi} from 'vitest';
 
 import {
   analysisNodes,
+  elementCandidates,
+  initialExplorerSelection,
   explorerTree,
   nodePreviewRect,
 } from '../../app/common/renderer/components/SessionInspector/SourceTab/ElementExplorer/element-explorer-view.js';
@@ -13,6 +15,7 @@ import {EMBEDDED_PROTOCOL_CHANNEL, EMBEDDED_PROTOCOL_VERSION} from '../../app/co
 
 const snapshot = {
   snapshotId: 'snapshot-1',
+  targetNodeId: '0',
   sessionId: 'session-1',
   platform: 'android',
   context: 'NATIVE_APP',
@@ -61,7 +64,7 @@ function setup() {
           status: 'running',
           phase: 'Analizando',
           processed: 1,
-          total: 2,
+          total: 1,
           ...payload,
         },
       },
@@ -94,13 +97,14 @@ describe('element explorer analysis lifecycle', () => {
     app.deliver({}, {origin: 'https://untrusted.example'});
     app.deliver({requestId: 'other'});
     app.deliver({snapshotId: 'other'});
+    app.deliver({targetNodeId: ''});
     expect(app.onUpdate).not.toHaveBeenCalled();
     app.deliver({});
     expect(app.onUpdate).toHaveBeenCalledOnce();
     app.client.dispose();
   });
 
-  it('accepts partial results only for existing nodes and candidate IDs, including the root', () => {
+  it('only accepts results for the requested node, including an explicitly selected root', () => {
     const app = setup();
     app.client.start(snapshot);
     const root = {nodeId: '', suggestedName: 'Pantalla', recommendedCandidateId: null, reason: 'Contenedor'};
@@ -108,7 +112,91 @@ describe('element explorer analysis lifecycle', () => {
     app.deliver({
       results: [root, known, {...known, nodeId: 'invented'}, {...known, recommendedCandidateId: 'invented'}],
     });
-    expect(app.onUpdate).toHaveBeenCalledWith(expect.objectContaining({results: [root, known]}));
+    expect(app.onUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        results: [{...known, proposals: [], warnings: []}],
+      }),
+    );
+    app.client.start({...snapshot, targetNodeId: ''});
+    app.deliver({requestId: 'request-2', targetNodeId: '', results: [known, root]});
+    expect(app.onUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        results: [{...root, proposals: [], warnings: []}],
+      }),
+    );
+    app.client.dispose();
+  });
+
+  it('requires a real selected node before starting, regardless of its interaction type', () => {
+    const app = setup();
+    expect(() => app.client.start({...snapshot, targetNodeId: undefined})).toThrow('Selecciona un elemento');
+    expect(() => app.client.start({...snapshot, targetNodeId: 'unknown'})).toThrow('Selecciona un elemento');
+    expect(app.parentWindow.postMessage).not.toHaveBeenCalled();
+    app.client.start({...snapshot, nodes: snapshot.nodes.map((node) => ({...node, tag: 'TextView'}))});
+    expect(app.parentWindow.postMessage).toHaveBeenCalledOnce();
+    app.client.dispose();
+  });
+
+  it('validates proposal shapes and accepts their contracts without accepting another target', () => {
+    const app = setup();
+    app.client.start(snapshot);
+    const proposal = {
+      id: 'agent-1',
+      strategy: 'xpath',
+      selector: '//*[@text="Pagar"]',
+      reason: 'Texto observado',
+      unique: true,
+      structural: false,
+    };
+    const contract = {
+      nodeId: '0',
+      candidateId: 'agent-1',
+      compatible: true,
+      locatorType: 'XPATH',
+      locatorValue: proposal.selector,
+    };
+    app.deliver({
+      results: [
+        {
+          nodeId: '0',
+          suggestedName: 'payButton',
+          recommendedCandidateId: 'id-pay',
+          reason: 'Objetivo',
+          proposals: [
+            proposal,
+            {...proposal, id: 'id-pay'},
+            {...proposal, id: 'bad-unique', unique: 'true'},
+            {...proposal, id: 'bad-empty', selector: ''},
+            proposal,
+          ],
+          warnings: ['No reemplaza verificación Appium', null, 8],
+        },
+      ],
+      locatorContracts: [contract, {...contract, nodeId: ''}],
+    });
+    expect(app.onUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        results: [expect.objectContaining({proposals: [proposal], warnings: ['No reemplaza verificación Appium']})],
+        locatorContracts: [contract],
+      }),
+    );
+    app.deliver({status: 'completed', locatorContracts: [contract]});
+    expect(app.onUpdate).toHaveBeenLastCalledWith(expect.objectContaining({locatorContracts: [contract]}));
+    app.client.dispose();
+  });
+
+  it('changing the target cancels the old request and rejects its late proposals', () => {
+    const app = setup();
+    app.client.start(snapshot);
+    app.client.start({...snapshot, targetNodeId: ''});
+    app.deliver({
+      status: 'completed',
+      results: [{nodeId: '0', suggestedName: 'old', recommendedCandidateId: null, reason: 'old'}],
+    });
+    app.deliver({requestId: 'request-2', targetNodeId: '0'});
+    expect(app.onUpdate).not.toHaveBeenCalled();
+    app.deliver({requestId: 'request-2', targetNodeId: '', status: 'completed'});
+    expect(app.onUpdate).toHaveBeenCalledOnce();
     app.client.dispose();
   });
 
@@ -122,7 +210,7 @@ describe('element explorer analysis lifecycle', () => {
     });
     app.deliver({status: 'completed'});
     expect(app.onUpdate).not.toHaveBeenCalled();
-    app.deliver({requestId: 'request-2', status: 'completed', processed: 2, total: 2});
+    app.deliver({requestId: 'request-2', status: 'completed', processed: 1, total: 1});
     expect(app.onUpdate).toHaveBeenCalledOnce();
     app.deliver({requestId: 'request-2'});
     expect(app.onUpdate).toHaveBeenCalledOnce();
@@ -190,5 +278,52 @@ describe('screenshot node highlight', () => {
       nodePreviewRect({attributes: {x: '10', y: '20', width: '30', height: '40'}}, {width: 100, height: 100}),
     ).toEqual({left: '10%', top: '20%', width: '30%', height: '40%'});
     expect(nodePreviewRect({attributes: {}}, {width: 100, height: 100})).toBeNull();
+  });
+});
+
+describe('selected element candidates and initial Inspector selection', () => {
+  it('preselects any Inspector path and expands its ancestors, including the empty root path', () => {
+    const catalog = {...snapshot, roots: ['']};
+    expect(initialExplorerSelection(catalog, '0')).toEqual({nodeId: '0', candidateId: 'id-pay', expandedKeys: ['']});
+    expect(initialExplorerSelection(catalog, '')).toEqual({nodeId: '', candidateId: null, expandedKeys: ['']});
+    expect(initialExplorerSelection(catalog, undefined).nodeId).toBeNull();
+    expect(initialExplorerSelection(catalog, 'stale').nodeId).toBeNull();
+  });
+
+  it('merges new proposals without replacing or duplicating local selector pairs', () => {
+    const proposals = [
+      {id: 'agent-same', strategy: 'id', selector: 'pay', reason: 'Same selector', unique: true, structural: false},
+      {
+        id: 'agent-new',
+        strategy: 'xpath',
+        selector: '//*[@text="Pagar"]',
+        reason: 'Visible text',
+        unique: true,
+        structural: false,
+      },
+      {
+        id: 'agent-new-duplicate',
+        strategy: 'xpath',
+        selector: '//*[@text="Pagar"]',
+        reason: 'Duplicate pair',
+        unique: true,
+        structural: false,
+      },
+      {
+        id: 'id-pay',
+        strategy: 'xpath',
+        selector: '//invented',
+        reason: 'Conflicting ID',
+        unique: true,
+        structural: false,
+      },
+    ];
+    const result = elementCandidates(snapshot.nodes[1], proposals);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({id: 'id-pay', selector: 'pay', origin: 'local'});
+    expect(result[1]).toMatchObject({id: 'agent-new', origin: 'agent', stability: 'contextual'});
+    expect(result[1]).not.toHaveProperty('sameElement');
+    expect(result[1]).not.toHaveProperty('matchCount');
+    expect(elementCandidates(snapshot.nodes[1])).toHaveLength(1);
   });
 });

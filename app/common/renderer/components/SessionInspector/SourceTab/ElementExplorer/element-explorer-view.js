@@ -102,3 +102,33 @@ export function nodePreviewRect(node, viewport) {
     height: ((bottom - top) / viewport.height) * 100 + '%',
   };
 }
+
+/** Keep local candidates first; an agent proposal never replaces recorded evidence. */
+export function elementCandidates(node, proposals = []) {
+  const candidates = (node?.candidates || []).map((candidate) => ({...candidate, origin: 'local'}));
+  const ids = new Set(candidates.map(({id}) => id));
+  const pairs = new Set(candidates.map(({strategy, selector}) => JSON.stringify([strategy, selector])));
+  for (const proposal of proposals) {
+    const pair = JSON.stringify([proposal.strategy, proposal.selector]);
+    if (ids.has(proposal.id) || pairs.has(pair)) {
+      continue;
+    }
+    ids.add(proposal.id);
+    pairs.add(pair);
+    candidates.push({...proposal, origin: 'agent', stability: proposal.structural ? 'structural' : 'contextual'});
+  }
+  return candidates;
+}
+
+/** The Inspector path may be empty: it identifies the XML document root. */
+export function initialExplorerSelection(catalog, path) {
+  const node = typeof path === 'string' ? catalog.nodes.find((entry) => entry.nodeId === path) : undefined;
+  const expanded = new Set(catalog.roots);
+  const lookup = new Map(catalog.nodes.map((entry) => [entry.nodeId, entry]));
+  let current = node;
+  while (current?.parentId !== null && current?.parentId !== undefined) {
+    expanded.add(current.parentId);
+    current = lookup.get(current.parentId);
+  }
+  return {nodeId: node?.nodeId ?? null, candidateId: node?.candidates[0]?.id ?? null, expandedKeys: [...expanded]};
+}

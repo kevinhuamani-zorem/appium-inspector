@@ -92,7 +92,8 @@ origin, channel, version, and type before consuming a payload.
 Protocol version 3 also supports the optional host-assisted element explorer:
 
 - `appium-inspector:analyze-elements`: requestId, snapshotId, sessionId,
-  platform, native context, sourceXml and the complete pre-order node catalog.
+  platform, native context, sourceXml, the complete pre-order node catalog and
+  a required targetNodeId (the root uses an empty string).
 - `appium-inspector:cancel-element-analysis`: requestId and snapshotId.
 - `appium-inspector:element-analysis-update`: correlated status, phase,
   processed/total counts and validated node recommendations. An early update
@@ -101,8 +102,15 @@ Protocol version 3 also supports the optional host-assisted element explorer:
 
 The iframe validates the origin, parent window, IDs and candidate references.
 The host validates the active session and XML before sending evidence to its
-provider. The agent can rank existing candidates; it cannot certify identity.
-Closing, refreshing or switching snapshots cancels the outstanding analysis.
+provider. The QA selects a node and explicitly requests analysis; opening the explorer
+or changing the selection does not invoke the agent. Only targetNodeId receives
+a result, while the sanitized tree provides context. The agent can rank existing
+candidates and propose XPath expressions. The host accepts proposals only if
+they select exactly the target XML element, computes their framework contracts
+and returns them in results[].proposals. Invalid proposals have actionable
+warnings. The agent cannot certify live device identity.
+Closing, refreshing, changing the selection or switching snapshots cancels the
+outstanding analysis. Updates must match the active target and request IDs.
 Provider failure retains the local catalog for manual verification.
 
 Using a candidate resolves the node's independent structural XPath, requires

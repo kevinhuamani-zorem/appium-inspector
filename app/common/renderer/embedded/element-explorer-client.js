@@ -42,6 +42,7 @@ export function createElementAnalysisClient({
       !payload ||
       payload.requestId !== active.requestId ||
       payload.snapshotId !== active.snapshotId ||
+      (payload.targetNodeId !== undefined && payload.targetNodeId !== active.targetNodeId) ||
       !statuses.has(payload.status) ||
       typeof payload.phase !== 'string' ||
       !Number.isInteger(payload.processed) ||
@@ -51,21 +52,68 @@ export function createElementAnalysisClient({
     ) {
       return;
     }
-    const results = Array.isArray(payload.results)
-      ? payload.results.filter((result) => {
-          const candidates = active.nodes.get(result?.nodeId);
-          return (
-            candidates &&
-            typeof result.suggestedName === 'string' &&
-            typeof result.reason === 'string' &&
-            (result.recommendedCandidateId == null || candidates.has(result.recommendedCandidateId))
-          );
-        })
-      : [];
+    const results = [];
+    for (const result of Array.isArray(payload.results) ? payload.results : []) {
+      if (
+        result?.nodeId !== active.targetNodeId ||
+        typeof result.suggestedName !== 'string' ||
+        typeof result.reason !== 'string'
+      ) {
+        continue;
+      }
+      const candidates = active.nodes.get(active.targetNodeId);
+      const proposals = [];
+      const seen = new Set();
+      for (const proposal of Array.isArray(result.proposals) ? result.proposals : []) {
+        if (
+          !proposal ||
+          typeof proposal.id !== 'string' ||
+          !proposal.id.trim() ||
+          typeof proposal.strategy !== 'string' ||
+          !proposal.strategy.trim() ||
+          typeof proposal.selector !== 'string' ||
+          !proposal.selector.trim() ||
+          typeof proposal.reason !== 'string' ||
+          ![true, false, null].includes(proposal.unique) ||
+          typeof proposal.structural !== 'boolean' ||
+          active.localCandidateIds.has(proposal.id) ||
+          seen.has(proposal.id)
+        ) {
+          continue;
+        }
+        seen.add(proposal.id);
+        proposals.push({
+          id: proposal.id,
+          strategy: proposal.strategy,
+          selector: proposal.selector,
+          reason: proposal.reason,
+          unique: proposal.unique,
+          structural: proposal.structural,
+        });
+      }
+      const acceptedIds = new Set([...candidates, ...proposals.map(({id}) => id)]);
+      if (result.recommendedCandidateId != null && !acceptedIds.has(result.recommendedCandidateId)) {
+        continue;
+      }
+      for (const {id} of proposals) {
+        candidates.add(id);
+      }
+      results.push({
+        nodeId: result.nodeId,
+        suggestedName: result.suggestedName,
+        recommendedCandidateId: result.recommendedCandidateId ?? null,
+        reason: result.reason,
+        proposals,
+        warnings: Array.isArray(result.warnings)
+          ? result.warnings.filter((warning) => typeof warning === 'string')
+          : [],
+      });
+    }
     const locatorContracts = Array.isArray(payload.locatorContracts)
       ? payload.locatorContracts.filter((entry) => {
           const candidates = active.nodes.get(entry?.nodeId);
           return (
+            entry?.nodeId === active.targetNodeId &&
             candidates?.has(entry.candidateId) &&
             typeof entry.compatible === 'boolean' &&
             (entry.locatorType === undefined || typeof entry.locatorType === 'string') &&
@@ -96,11 +144,17 @@ export function createElementAnalysisClient({
       if (disposed) {
         throw new Error('El explorador ya está cerrado');
       }
+      const target = snapshot.nodes.find((node) => node.nodeId === snapshot.targetNodeId);
+      if (typeof snapshot.targetNodeId !== 'string' || !target) {
+        throw new Error('Selecciona un elemento del árbol antes de analizarlo.');
+      }
       cancel();
       const requestId = makeId();
       active = {
         requestId,
         snapshotId: snapshot.snapshotId,
+        targetNodeId: snapshot.targetNodeId,
+        localCandidateIds: new Set(target.candidates.map(({id}) => id)),
         nodes: new Map(snapshot.nodes.map((node) => [node.nodeId, new Set(node.candidates.map(({id}) => id))])),
       };
       try {

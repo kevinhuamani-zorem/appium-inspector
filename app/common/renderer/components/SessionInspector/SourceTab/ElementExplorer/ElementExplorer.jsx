@@ -1,11 +1,17 @@
 import {IconBinaryTree, IconRefresh} from '@tabler/icons-react';
-import {Alert, Button, Empty, Input, Modal, Select, Space, Spin, Table, Tag, Tree, Typography} from 'antd';
+import {Alert, Button, Empty, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip, Tree, Typography} from 'antd';
 import {useEffect, useMemo, useRef, useState} from 'react';
 
 import {NATIVE_APP} from '../../../../constants/session-inspector.js';
 import {createElementAnalysisClient} from '../../../../embedded/element-explorer-client.js';
 import {buildElementCatalog} from '../../../../utils/locator-generation/element-explorer.js';
-import {analysisNodes, explorerTree, nodePreviewRect} from './element-explorer-view.js';
+import {
+  analysisNodes,
+  elementCandidates,
+  explorerTree,
+  initialExplorerSelection,
+  nodePreviewRect,
+} from './element-explorer-view.js';
 
 import styles from './ElementExplorer.module.css';
 
@@ -28,6 +34,7 @@ export function ElementExplorerModal({
   automationName,
   driver,
   sessionCaps,
+  selectedElement,
   methodCallInProgress,
   verifyExplorerLocator,
   applyClientMethod,
@@ -37,7 +44,6 @@ export function ElementExplorerModal({
   const [captureError, setCaptureError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
-  const [analysisAttempt, setAnalysisAttempt] = useState(0);
   const [analysis, setAnalysis] = useState(idleAnalysis);
   const [recommendations, setRecommendations] = useState({});
   const [locatorContracts, setLocatorContracts] = useState({});
@@ -49,18 +55,22 @@ export function ElementExplorerModal({
   const [verification, setVerification] = useState(null);
   const [sending, setSending] = useState(false);
   const clientRef = useRef(null);
+  const analysisOperationRef = useRef(0);
+  const initialPathRef = useRef(selectedElement?.path);
   const operationRef = useRef(0);
   const snapshotRef = useRef(null);
   const currentRef = useRef(null);
   const platform = String(sessionCaps?.platformName || driver?.capabilities?.platformName || '').toLowerCase();
   const sessionId = driver?.sessionId || '';
   const native = currentContext === NATIVE_APP;
-  currentRef.current = {sourceXML, sourceJSON, currentContext, sessionId, refreshing};
+  currentRef.current = {sourceXML, sourceJSON, currentContext, sessionId, refreshing, selectedNodeId};
   snapshotRef.current = snapshot;
 
   useEffect(() => {
     operationRef.current++;
-    clientRef.current?.cancel();
+    analysisOperationRef.current++;
+    clientRef.current?.dispose();
+    clientRef.current = null;
     setSnapshot(null);
     setCaptureError('');
     setSelectedNodeId(null);
@@ -103,7 +113,11 @@ export function ElementExplorerModal({
           catalog,
           capturedAt: new Date().toLocaleTimeString(),
         });
-        setExpandedKeys(catalog.roots);
+        const selection = initialExplorerSelection(catalog, initialPathRef.current);
+        initialPathRef.current = undefined;
+        setSelectedNodeId(selection.nodeId);
+        setCandidateId(selection.candidateId);
+        setExpandedKeys(selection.expandedKeys);
       } catch (error) {
         setCaptureError(error.message);
       }
@@ -126,71 +140,10 @@ export function ElementExplorerModal({
     refreshing,
   ]);
 
-  useEffect(() => {
-    if (!snapshot) {
-      return;
-    }
-    let disposed = false;
-    setRecommendations({});
-    setAnalysis({
-      status: 'running',
-      phase: 'Preparando el análisis',
-      processed: 0,
-      total: snapshot.catalog.nodes.length,
-    });
-    let client;
-    try {
-      client = createElementAnalysisClient({
-        onUpdate(update) {
-          if (disposed || snapshotRef.current !== snapshot) {
-            return;
-          }
-          setAnalysis(update);
-          if (update.locatorContracts) {
-            setLocatorContracts(
-              Object.fromEntries(
-                update.locatorContracts.map((entry) => [JSON.stringify([entry.nodeId, entry.candidateId]), entry]),
-              ),
-            );
-          }
-          if (update.results?.length) {
-            setRecommendations((previous) => ({
-              ...previous,
-              ...Object.fromEntries(update.results.map((result) => [result.nodeId, result])),
-            }));
-          }
-        },
-      });
-      clientRef.current = client;
-      client.start({
-        snapshotId: snapshot.snapshotId,
-        sessionId: snapshot.sessionId,
-        platform: snapshot.platform,
-        context: snapshot.context,
-        sourceXml: snapshot.sourceXml,
-        nodes: analysisNodes(snapshot.catalog),
-      });
-    } catch (error) {
-      setAnalysis({
-        status: 'error',
-        phase: 'El análisis no está disponible',
-        error: error.message,
-        processed: 0,
-        total: 0,
-      });
-    }
-    return () => {
-      disposed = true;
-      client?.dispose();
-      if (clientRef.current === client) {
-        clientRef.current = null;
-      }
-    };
-  }, [snapshot, analysisAttempt]);
-
   useEffect(
     () => () => {
       operationRef.current++;
+      analysisOperationRef.current++;
       snapshotRef.current = null;
       clientRef.current?.dispose();
     },
@@ -199,8 +152,9 @@ export function ElementExplorerModal({
 
   const tree = useMemo(() => explorerTree(snapshot?.catalog, query, filter), [snapshot, query, filter]);
   const node = snapshot?.catalog.nodes.find((entry) => entry.nodeId === selectedNodeId);
-  const candidate = node?.candidates.find((entry) => entry.id === candidateId);
   const recommendation = node ? recommendations[node.nodeId] : undefined;
+  const candidates = elementCandidates(node, recommendation?.proposals);
+  const candidate = candidates.find((entry) => entry.id === candidateId);
   const candidateContract =
     node && candidate ? locatorContracts[JSON.stringify([node.nodeId, candidate.id])] : undefined;
   const previewRect = snapshot ? nodePreviewRect(node, snapshot.windowSize) : null;
@@ -215,6 +169,12 @@ export function ElementExplorerModal({
 
   const handleSelectNode = (keys) => {
     operationRef.current++;
+    analysisOperationRef.current++;
+    clientRef.current?.dispose();
+    clientRef.current = null;
+    setRecommendations({});
+    setLocatorContracts({});
+    setAnalysis(idleAnalysis);
     const next = snapshot?.catalog.nodes.find((entry) => entry.nodeId === keys[0]);
     setSelectedNodeId(next?.nodeId ?? null);
     setCandidateId(next?.candidates[0]?.id ?? null);
@@ -230,16 +190,83 @@ export function ElementExplorerModal({
   };
 
   const handleCancelAnalysis = () => {
-    clientRef.current?.cancel();
+    analysisOperationRef.current++;
+    clientRef.current?.dispose();
+    clientRef.current = null;
     setAnalysis((previous) => ({...previous, status: 'cancelled', phase: 'Análisis cancelado'}));
   };
-  const handleRetryAnalysis = () => {
-    clientRef.current?.cancel();
-    setAnalysisAttempt((value) => value + 1);
+  const handleAnalyzeElement = () => {
+    if (stale || !node || sending || methodCallInProgress) {
+      return;
+    }
+    clientRef.current?.dispose();
+    const operation = ++analysisOperationRef.current;
+    operationRef.current++;
+    setRecommendations({});
+    setCandidateId(node.candidates[0]?.id ?? null);
+    setVerification(null);
+    setSending(false);
+    setAnalysis({status: 'running', phase: 'Analizando el elemento seleccionado', processed: 0, total: 1});
+    const isCurrent = () =>
+      analysisOperationRef.current === operation &&
+      snapshotRef.current === snapshot &&
+      currentRef.current.selectedNodeId === node.nodeId &&
+      currentRef.current.sourceXML === snapshot.sourceXml &&
+      currentRef.current.sourceJSON === snapshot.sourceJSON &&
+      currentRef.current.currentContext === snapshot.context &&
+      currentRef.current.sessionId === snapshot.sessionId &&
+      !currentRef.current.refreshing;
+    try {
+      const client = createElementAnalysisClient({
+        onUpdate(update) {
+          if (!isCurrent()) {
+            return;
+          }
+          setAnalysis(update);
+          if (update.locatorContracts) {
+            setLocatorContracts((previous) => ({
+              ...previous,
+              ...Object.fromEntries(
+                update.locatorContracts.map((entry) => [JSON.stringify([entry.nodeId, entry.candidateId]), entry]),
+              ),
+            }));
+          }
+          if (update.results?.length) {
+            operationRef.current++;
+            setVerification(null);
+            setSending(false);
+            setRecommendations((previous) => ({
+              ...previous,
+              ...Object.fromEntries(update.results.map((result) => [result.nodeId, result])),
+            }));
+          }
+        },
+      });
+      clientRef.current = client;
+      client.start({
+        snapshotId: snapshot.snapshotId,
+        targetNodeId: node.nodeId,
+        sessionId: snapshot.sessionId,
+        platform: snapshot.platform,
+        context: snapshot.context,
+        sourceXml: snapshot.sourceXml,
+        nodes: analysisNodes(snapshot.catalog),
+      });
+    } catch (error) {
+      setAnalysis({
+        status: 'error',
+        phase: 'No se pudo analizar este elemento',
+        error: error.message,
+        processed: 0,
+        total: 1,
+      });
+    }
   };
   const handleRefresh = async () => {
     operationRef.current++;
-    clientRef.current?.cancel();
+    analysisOperationRef.current++;
+    clientRef.current?.dispose();
+    clientRef.current = null;
     setRefreshing(true);
     setVerification(null);
     try {
@@ -253,7 +280,9 @@ export function ElementExplorerModal({
   };
   const handleClose = () => {
     operationRef.current++;
-    clientRef.current?.cancel();
+    analysisOperationRef.current++;
+    clientRef.current?.dispose();
+    clientRef.current = null;
     onClose();
   };
 
@@ -353,6 +382,7 @@ export function ElementExplorerModal({
           ) : (
             <Tag>Pendiente de Appium</Tag>
           )}
+          {entry.origin === 'agent' && <Tag color="purple">Propuesta del agente</Tag>}
           {entry.structural && <Tag color="orange">Estructural · frágil</Tag>}
           {recommendation?.recommendedCandidateId === entry.id && <Tag color="purple">Sugerido por agente</Tag>}
         </Space>
@@ -412,10 +442,12 @@ export function ElementExplorerModal({
           <div className={styles.analysis} role="status" aria-live="polite">
             <Space wrap>
               {analysisRunning && <Spin size="small" />}
-              <Text>{analysis.phase || 'Árbol local disponible'}</Text>
+              <Text>
+                {analysis.phase || 'Selecciona un elemento del árbol y solicita su análisis cuando lo necesites.'}
+              </Text>
               {analysis.total > 0 && (
                 <Text type="secondary">
-                  {analysis.processed} / {analysis.total} nodos
+                  {analysis.processed} / {analysis.total} elemento
                 </Text>
               )}
               {analysis.model && <Text type="secondary">{analysis.model}</Text>}
@@ -425,9 +457,15 @@ export function ElementExplorerModal({
                 Cancelar análisis
               </Button>
             ) : (
-              <Button size="small" onClick={handleRetryAnalysis}>
-                Volver a analizar
-              </Button>
+              <Tooltip title="El agente analiza únicamente el nodo seleccionado y usa el XML completo como contexto. Puedes elegir textos, campos, botones o cualquier otro nodo.">
+                <Button
+                  type="primary"
+                  disabled={stale || !node || sending || methodCallInProgress}
+                  onClick={handleAnalyzeElement}
+                >
+                  Analizar este elemento
+                </Button>
+              </Tooltip>
             )}
           </div>
           {analysis.status === 'error' && (
@@ -488,7 +526,24 @@ export function ElementExplorerModal({
                       description={recommendation.reason}
                     />
                   )}
-                  <Text type="secondary">La sugerencia del agente no sustituye la verificación contra Appium.</Text>
+                  {recommendation?.warnings?.length > 0 && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      title="Observaciones del análisis"
+                      description={
+                        <ul>
+                          {[...new Set(recommendation.warnings)].map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      }
+                    />
+                  )}
+                  <Text type="secondary">
+                    Las propuestas se comprueban con el XML. Verifica el selector en Appium antes de usarlo; «Usar en
+                    Recorder» también verifica su identidad.
+                  </Text>
                   <details className={styles.attributes}>
                     <summary>Atributos del XML ({Object.keys(node.attributes).length})</summary>
                     <dl>
@@ -504,7 +559,7 @@ export function ElementExplorerModal({
                     size="small"
                     rowKey="id"
                     pagination={false}
-                    dataSource={node.candidates}
+                    dataSource={candidates}
                     columns={columns}
                     scroll={{y: 350}}
                     locale={{emptyText: 'No hay locators compatibles para este nodo'}}
