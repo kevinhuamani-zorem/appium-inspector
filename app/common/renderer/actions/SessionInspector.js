@@ -13,6 +13,7 @@ import {debounce, isEmpty, omit} from '../utils/common.js';
 import {downloadFile, readTextFromUploadedFiles} from '../utils/file-handling.js';
 import {parseGestureFileContents} from '../utils/gesturefile-parsing.js';
 import {getSuggestedLocators} from '../utils/locator-generation/common.js';
+import {verifyExplorerCandidate} from '../utils/locator-generation/element-explorer.js';
 import {getEmbeddedLocatorCandidates} from '../utils/locator-generation/embedded-candidates.js';
 import {getOptimalXPath} from '../utils/locator-generation/xpath.js';
 import {log} from '../utils/logger.js';
@@ -270,6 +271,79 @@ export function useElementInRecorder(strategy, selector, visibleCandidates, opti
     };
 
     emitElementUsed(payload);
+    return payload;
+  };
+}
+
+/** Verify the catalog node through an independent XML reference before any transfer. */
+export function verifyExplorerLocator(node, candidate, snapshot, {isCurrent = () => true, transfer = false} = {}) {
+  return async (_dispatch, getState) => {
+    const initial = getState().inspector;
+    const {driver, sourceJSON: sourceCapture} = initial;
+    if (!initial.isEmbeddedMode || initial.currentContext !== NATIVE_APP || !driver) {
+      throw new EmbeddedProtocolError('NOT_EMBEDDED_MODE', 'El explorador requiere una sesión nativa embebida.');
+    }
+    const current = () => {
+      const state = getState().inspector;
+      return (
+        isCurrent() &&
+        state.driver === driver &&
+        driver.sessionId === snapshot.sessionId &&
+        state.sourceXML === snapshot.sourceXml &&
+        state.currentContext === snapshot.context &&
+        state.sourceJSON === sourceCapture &&
+        !state.isQuittingSession &&
+        !state.isSessionDone
+      );
+    };
+    const assertCurrent = () => {
+      if (!current()) {
+        throw new EmbeddedProtocolError('STALE_SNAPSHOT', 'La pantalla cambió. Actualiza el explorador.');
+      }
+    };
+    // Redux may still hold the old capture after navigation or an asynchronous device update.
+    // Read the live source without refreshing the store, then verify it again before transfer.
+    const assertLiveSnapshot = async () => {
+      assertCurrent();
+      const context = await driver.getAppiumContext();
+      assertCurrent();
+      if (context !== snapshot.context) {
+        throw new EmbeddedProtocolError('STALE_SNAPSHOT', 'El contexto cambió. Actualiza el explorador.');
+      }
+      const source = await driver.getPageSource();
+      assertCurrent();
+      if (typeof source !== 'string' || source.trim() !== snapshot.sourceXml.trim()) {
+        throw new EmbeddedProtocolError('STALE_SNAPSHOT', 'La pantalla cambió. Actualiza el explorador.');
+      }
+      const finalContext = await driver.getAppiumContext();
+      assertCurrent();
+      if (finalContext !== snapshot.context) {
+        throw new EmbeddedProtocolError('STALE_SNAPSHOT', 'El contexto cambió. Actualiza el explorador.');
+      }
+    };
+    await assertLiveSnapshot();
+    const inspectorDriver = InspectorDriver.instance(driver);
+    const verified = await verifyExplorerCandidate({
+      node,
+      candidate,
+      isCurrent: current,
+      findElements: async ({strategy, selector}) => {
+        const result = await inspectorDriver.run({strategy, selector, fetchArray: true, skipRefresh: true});
+        return result.elements.map(({id}) => id);
+      },
+    });
+    await assertLiveSnapshot();
+    const payload = {
+      strategy: candidate.strategy,
+      selector: candidate.selector,
+      elementId: verified.elementId,
+      tag: node.tag,
+      attributes: node.attributes,
+      candidates: verified.candidates,
+    };
+    if (transfer) {
+      emitElementUsed(payload);
+    }
     return payload;
   };
 }

@@ -47,7 +47,41 @@ export const toXPathLiteral = (value) => {
     .join(`, "'", `)})`;
 };
 
-const elementNodes = (document) => Array.from(document?.getElementsByTagName?.('*') || []);
+const documentContexts = new WeakMap();
+const EMPTY_NODES = new Set();
+
+/** One index per immutable XML snapshot; the DOM is released together with its context. */
+export function createEmbeddedLocatorContext(document) {
+  const existing = documentContexts.get(document);
+  if (existing) {
+    return existing;
+  }
+  const nodes = Array.from(document?.getElementsByTagName?.('*') || []);
+  const byTag = new Map();
+  const byAttribute = new Map();
+  for (const node of nodes) {
+    if (!byTag.has(node.tagName)) {
+      byTag.set(node.tagName, new Set());
+    }
+    byTag.get(node.tagName).add(node);
+    for (const attribute of Array.from(node.attributes || [])) {
+      if (!byAttribute.has(attribute.name)) {
+        byAttribute.set(attribute.name, new Map());
+      }
+      const values = byAttribute.get(attribute.name);
+      if (!values.has(attribute.value)) {
+        values.set(attribute.value, new Set());
+      }
+      values.get(attribute.value).add(node);
+    }
+  }
+  const context = {document, nodes, byTag, byAttribute, containsIndexes: new Map(), containsCache: new Map()};
+  documentContexts.set(document, context);
+  return context;
+}
+
+const elementNodes = (document) =>
+  documentContexts.get(document)?.nodes || Array.from(document?.getElementsByTagName?.('*') || []);
 const hasValue = (value) => typeof value === 'string' && value.length > 0;
 const predicateLiteral = (value) => `'${escapePredicateString(value)}'`;
 const classChainLiteral = (value) => `'${escapeClassChainString(value)}'`;
@@ -55,21 +89,115 @@ const classChainLiteral = (value) => `'${escapeClassChainString(value)}'`;
 const matchesAttributes = (node, attributes) =>
   Object.entries(attributes).every(([name, value]) => node.getAttribute(name) === value);
 
+const countUniqueness = (nodes, predicate) => {
+  let count = 0;
+  for (const node of nodes) {
+    if (predicate(node)) {
+      count++;
+      if (count > 1) {
+        return false;
+      }
+    }
+  }
+  return count === 1 ? true : null;
+};
+
 const attributeUniqueness = (document, attributes, tagName) => {
-  const count = elementNodes(document).filter(
+  const context = documentContexts.get(document);
+  let nodes = elementNodes(document);
+  if (context) {
+    const buckets = Object.entries(attributes).map(
+      ([name, value]) => context.byAttribute.get(name)?.get(value) || EMPTY_NODES,
+    );
+    if (tagName) {
+      buckets.push(context.byTag.get(tagName) || EMPTY_NODES);
+    }
+    if (buckets.length) {
+      nodes = buckets.reduce((smallest, bucket) => (bucket.size < smallest.size ? bucket : smallest));
+    }
+  }
+  return countUniqueness(
+    nodes,
     (node) => (!tagName || node.tagName === tagName) && matchesAttributes(node, attributes),
-  ).length;
-  return count === 0 ? null : count === 1;
+  );
+};
+
+const trigrams = (value) => {
+  const result = new Set();
+  for (let index = 0; index <= value.length - 3; index++) {
+    result.add(value.slice(index, index + 3));
+  }
+  return result;
+};
+
+const indexedContainsValues = (context, attribute, value) => {
+  const values = context.byAttribute.get(attribute);
+  if (!values) {
+    return [];
+  }
+  if (value.length < 3) {
+    return values.keys();
+  }
+  let index = context.containsIndexes.get(attribute);
+  if (!index) {
+    index = new Map();
+    for (const attributeValue of values.keys()) {
+      for (const gram of trigrams(attributeValue)) {
+        if (!index.has(gram)) {
+          index.set(gram, new Set());
+        }
+        index.get(gram).add(attributeValue);
+      }
+    }
+    context.containsIndexes.set(attribute, index);
+  }
+  let smallest;
+  for (const gram of trigrams(value)) {
+    const bucket = index.get(gram);
+    if (!bucket) {
+      return [];
+    }
+    if (!smallest || bucket.size < smallest.size) {
+      smallest = bucket;
+    }
+  }
+  return smallest || [];
 };
 
 const containsUniqueness = (document, attribute, value, tagName) => {
-  const count = elementNodes(document).filter(
-    (node) =>
-      (!tagName || node.tagName === tagName) &&
-      hasValue(node.getAttribute(attribute)) &&
-      node.getAttribute(attribute).includes(value),
-  ).length;
-  return count === 0 ? null : count === 1;
+  const context = documentContexts.get(document);
+  if (!context) {
+    return countUniqueness(
+      elementNodes(document),
+      (node) =>
+        (!tagName || node.tagName === tagName) &&
+        hasValue(node.getAttribute(attribute)) &&
+        node.getAttribute(attribute).includes(value),
+    );
+  }
+  const key = JSON.stringify([attribute, value, tagName || null]);
+  if (context.containsCache.has(key)) {
+    return context.containsCache.get(key);
+  }
+  let count = 0;
+  for (const attributeValue of indexedContainsValues(context, attribute, value)) {
+    if (!hasValue(attributeValue) || !attributeValue.includes(value)) {
+      continue;
+    }
+    const matches = context.byAttribute.get(attribute).get(attributeValue);
+    for (const node of matches) {
+      if (!tagName || node.tagName === tagName) {
+        count++;
+        if (count > 1) {
+          context.containsCache.set(key, false);
+          return false;
+        }
+      }
+    }
+  }
+  const result = count === 1 ? true : null;
+  context.containsCache.set(key, result);
+  return result;
 };
 
 const stableHash = (value) => {
@@ -160,7 +288,7 @@ const addAndroidAttributeCandidates = (candidates, document, tagName, attribute,
   );
 };
 
-const generateAndroidCandidates = (document, node) => {
+const generateAndroidCandidates = (document, node, structuralReference) => {
   const candidates = [];
   const tagName = node.tagName;
   const resourceId = node.getAttribute('resource-id') || node.getAttribute('id');
@@ -262,7 +390,9 @@ const generateAndroidCandidates = (document, node) => {
     const classXPath = classAttribute ? xpathExact('*', classAttribute, className) : `//${className}`;
     const classUnique = classAttribute
       ? attributeUniqueness(document, {class: className})
-      : elementNodes(document).filter(({tagName: candidateTag}) => candidateTag === className).length === 1;
+      : documentContexts.has(document)
+        ? documentContexts.get(document).byTag.get(className)?.size === 1
+        : elementNodes(document).filter(({tagName: candidateTag}) => candidateTag === className).length === 1;
     candidates.push(
       makeCandidate({
         label: 'Class name',
@@ -322,7 +452,7 @@ const generateAndroidCandidates = (document, node) => {
           strategy: STRATEGIES.XPATH,
           selector: combinedXPath,
           priority: 68,
-          unique: xpathUniqueness(document, node, combinedXPath),
+          unique: combinedUnique,
           source: `${classAttribute || 'tagName'},${attribute}`,
           reason: `Disambiguates non-unique ${attribute} with widget class`,
         }),
@@ -330,7 +460,7 @@ const generateAndroidCandidates = (document, node) => {
     }
   }
 
-  const structuralXPath = getOptimalXPath(document, node);
+  const structuralXPath = structuralReference || getOptimalXPath(document, node);
   if (structuralXPath) {
     candidates.push(
       makeCandidate({
@@ -338,7 +468,7 @@ const generateAndroidCandidates = (document, node) => {
         strategy: STRATEGIES.XPATH,
         selector: structuralXPath,
         priority: 1000,
-        unique: xpathUniqueness(document, node, structuralXPath),
+        unique: structuralReference ? true : xpathUniqueness(document, node, structuralXPath),
         source: 'hierarchy',
         reason: 'Structural source-tree fallback',
         structural: true,
@@ -391,7 +521,7 @@ const addIosAttributeCandidates = (candidates, document, type, attribute, value,
   );
 };
 
-const generateIosCandidates = (document, node) => {
+const generateIosCandidates = (document, node, structuralReference) => {
   const candidates = [];
   const type = node.getAttribute('type') || node.tagName;
   const name = node.getAttribute('name');
@@ -467,7 +597,7 @@ const generateIosCandidates = (document, node) => {
     );
   }
 
-  const structuralXPath = getOptimalXPath(document, node);
+  const structuralXPath = structuralReference || getOptimalXPath(document, node);
   if (structuralXPath) {
     candidates.push(
       makeCandidate({
@@ -475,7 +605,7 @@ const generateIosCandidates = (document, node) => {
         strategy: STRATEGIES.XPATH,
         selector: structuralXPath,
         priority: 1000,
-        unique: xpathUniqueness(document, node, structuralXPath),
+        unique: structuralReference ? true : xpathUniqueness(document, node, structuralXPath),
         source: 'hierarchy',
         reason: 'Structural source-tree fallback',
         structural: true,
@@ -498,12 +628,26 @@ export function getEmbeddedLocatorCandidates(selectedElement, sourceXML, isNativ
   if (!node) {
     return [];
   }
+  return getEmbeddedLocatorCandidatesForNode(document, node, isNative, automationName);
+}
+
+/** Bulk caller supplies an already parsed, indexed snapshot and an exact structural reference. */
+export function getEmbeddedLocatorCandidatesForNode(
+  document,
+  node,
+  isNative,
+  automationName,
+  {referenceSelector} = {},
+) {
+  if (!isNative || !node) {
+    return [];
+  }
   switch (automationName) {
     case DRIVERS.UIAUTOMATOR2:
-      return generateAndroidCandidates(document, node);
+      return generateAndroidCandidates(document, node, referenceSelector);
     case DRIVERS.XCUITEST:
     case DRIVERS.MAC2:
-      return generateIosCandidates(document, node);
+      return generateIosCandidates(document, node, referenceSelector);
     default:
       return [];
   }

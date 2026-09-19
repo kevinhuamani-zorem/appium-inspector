@@ -13,6 +13,7 @@ const AppSource = (props) => {
       collapsible={collapsible}
       collapsed={collapsed}
       onToggleCollapse={onToggleCollapse}
+      explorerProps={props}
     >
       <AppSourceTreeWrapper {...props} />
     </AppSourceCard>

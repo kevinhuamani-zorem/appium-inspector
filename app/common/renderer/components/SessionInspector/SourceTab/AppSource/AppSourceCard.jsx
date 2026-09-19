@@ -4,6 +4,7 @@ import {useTranslation} from 'react-i18next';
 
 import {downloadFile} from '../../../../utils/file-handling.js';
 import {copyToClipboard} from '../../../../utils/other.js';
+import ElementExplorer from '../ElementExplorer/ElementExplorer.jsx';
 
 const downloadXML = (sourceXML) => {
   const href = 'data:application/xml;charset=utf-8,' + encodeURIComponent(sourceXML);
@@ -31,11 +32,12 @@ const AppSourcePanelTitle = () => {
  * its header visible - the side-by-side layout already offers a full
  * collapse via the Splitter divider.
  */
-const AppSourceHeaderButtons = ({sourceXML, collapsible, collapsed, onToggleCollapse}) => {
+const AppSourceHeaderButtons = ({sourceXML, collapsible, collapsed, onToggleCollapse, explorerProps}) => {
   const {t} = useTranslation();
 
   return (
     <span>
+      {explorerProps?.isEmbeddedMode && <ElementExplorer {...explorerProps} />}
       <Tooltip title={t('Copy XML Source to Clipboard')}>
         <Button
           type="text"
@@ -68,7 +70,7 @@ const AppSourceHeaderButtons = ({sourceXML, collapsible, collapsed, onToggleColl
 /**
  * Wrapper card for the app source tree.
  */
-const AppSourceCard = ({sourceXML, collapsible, collapsed, onToggleCollapse, children}) => (
+const AppSourceCard = ({sourceXML, collapsible, collapsed, onToggleCollapse, children, explorerProps}) => (
   <Card
     title={<AppSourcePanelTitle />}
     extra={
@@ -77,6 +79,7 @@ const AppSourceCard = ({sourceXML, collapsible, collapsed, onToggleCollapse, chi
         collapsible={collapsible}
         collapsed={collapsed}
         onToggleCollapse={onToggleCollapse}
+        explorerProps={explorerProps}
       />
     }
   >

@@ -7,6 +7,8 @@ export const EMBEDDED_MESSAGE_TYPES = {
   CONNECTED: 'appium-inspector:connected',
   ERROR: 'appium-inspector:error',
   ELEMENT_USED: 'appium-inspector:element-used',
+  ANALYZE_ELEMENTS: 'appium-inspector:analyze-elements',
+  CANCEL_ELEMENT_ANALYSIS: 'appium-inspector:cancel-element-analysis',
 } as const;
 
 export type EmbeddedCapabilities = Record<string, unknown>;
@@ -245,7 +247,9 @@ type HostMessageType =
   | typeof EMBEDDED_MESSAGE_TYPES.READY
   | typeof EMBEDDED_MESSAGE_TYPES.CONNECTED
   | typeof EMBEDDED_MESSAGE_TYPES.ERROR
-  | typeof EMBEDDED_MESSAGE_TYPES.ELEMENT_USED;
+  | typeof EMBEDDED_MESSAGE_TYPES.ELEMENT_USED
+  | typeof EMBEDDED_MESSAGE_TYPES.ANALYZE_ELEMENTS
+  | typeof EMBEDDED_MESSAGE_TYPES.CANCEL_ELEMENT_ANALYSIS;
 
 export interface EmbeddedBridge {
   post<TPayload>(type: HostMessageType, payload?: TPayload): void;

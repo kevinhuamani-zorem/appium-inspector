@@ -85,3 +85,28 @@ compatibility.
 The complete typed protocol is exported from
 `app/common/renderer/embedded/protocol.ts`. Hosts should validate the Inspector message source,
 origin, channel, version, and type before consuming a payload.
+
+
+## Element explorer analysis extension
+
+Protocol version 3 also supports the optional host-assisted element explorer:
+
+- `appium-inspector:analyze-elements`: requestId, snapshotId, sessionId,
+  platform, native context, sourceXml and the complete pre-order node catalog.
+- `appium-inspector:cancel-element-analysis`: requestId and snapshotId.
+- `appium-inspector:element-analysis-update`: correlated status, phase,
+  processed/total counts and validated node recommendations. An early update
+  may provide locatorContracts (nodeId, candidateId, TypeLocator/value,
+  compatibility) resolved by the host's framework adapter.
+
+The iframe validates the origin, parent window, IDs and candidate references.
+The host validates the active session and XML before sending evidence to its
+provider. The agent can rank existing candidates; it cannot certify identity.
+Closing, refreshing or switching snapshots cancels the outstanding analysis.
+Provider failure retains the local catalog for manual verification.
+
+Using a candidate resolves the node's independent structural XPath, requires
+one candidate match with the same WebDriver element ID, and resolves the
+reference again before transfer. The ordinary version 3 ELEMENT_USED payload
+and the host's final identity/round-trip checks still apply. No analysis output
+is persisted in a recording.

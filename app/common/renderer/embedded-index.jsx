@@ -8,6 +8,7 @@ import {MemoryRouter} from 'react-router';
 import {attachToExternalSession} from './actions/SessionBuilder.js';
 import Spinner from './components/Spinner/Spinner.jsx';
 import SessionInspectorPage from './containers/SessionInspectorPage.js';
+import {ELEMENT_ANALYSIS_TYPES} from './embedded/element-explorer-client.js';
 import {
   EMBEDDED_MESSAGE_TYPES,
   EmbeddedProtocolError,
@@ -37,6 +38,10 @@ const EmbeddedInspector = () => {
     let connectionStarted = false;
 
     const onMessage = async (event) => {
+      // The explorer validates these replies against its own parent, origin and request.
+      if (event.data?.type === ELEMENT_ANALYSIS_TYPES.UPDATE) {
+        return;
+      }
       let payload;
       try {
         payload = validateHostMessage(event, window.parent, hostOrigin);
